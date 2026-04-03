@@ -1,4 +1,4 @@
-FROM node:22-alpine AS base
+FROM node:22-slim AS base
 
 # Stage 1: Install dependencies
 FROM base AS deps
@@ -20,11 +20,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
 
-# Install ffmpeg for audio conversion
-RUN apk add --no-cache ffmpeg
+# Install ffmpeg, ca-certificates, and python3 (needed by yt-dlp for comment extraction)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg ca-certificates python3 && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy standalone output
 COPY --from=builder /app/public ./public
