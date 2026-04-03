@@ -1,0 +1,507 @@
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
+
+// ─── Types ────────────────────────────────────────────────────
+
+interface TextBlock {
+  id: string;
+  type: "text";
+  content: string;
+}
+
+interface VoiceBlock {
+  id: string;
+  type: "voice";
+  audioBase64: string;
+  mimeType: string;
+  duration: number;
+  createdAt: string;
+}
+
+type Block = TextBlock | VoiceBlock;
+
+interface Favorite {
+  videoId: string;
+  title: string;
+  thumbnail: string;
+  duration: string;
+  url: string;
+  bpm: string | null;
+  key: string | null;
+  beatType: string | null;
+  inspiredBy: string[];
+  tags: string[];
+}
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+function nanoid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function getSupportedMimeType(): string {
+  const types = ["audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+  return types.find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// ─── Voice Recorder Hook ──────────────────────────────────────
+
+function useRecorder(onDone: (base64: string, mimeType: string, duration: number) => void) {
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const startTimeRef = useRef<number>(0);
+  const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const start = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getSupportedMimeType();
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      chunksRef.current = [];
+      startTimeRef.current = Date.now();
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        const duration = (Date.now() - startTimeRef.current) / 1000;
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+        const base64 = await blobToBase64(blob);
+        stream.getTracks().forEach((t) => t.stop());
+        onDone(base64, recorder.mimeType, duration);
+      };
+
+      recorder.start(100);
+      recorderRef.current = recorder;
+      setRecording(true);
+      setElapsed(0);
+      timerRef.current = setInterval(() => {
+        setElapsed((Date.now() - startTimeRef.current) / 1000);
+      }, 100);
+    } catch {
+      alert("Microphone access denied.");
+    }
+  }, [onDone]);
+
+  const stop = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+    setRecording(false);
+    setElapsed(0);
+  }, []);
+
+  return { recording, elapsed, start, stop };
+}
+
+// ─── Voice Block Player ───────────────────────────────────────
+
+function VoicePlayer({ block, onDelete }: { block: VoiceBlock; onDelete: () => void }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const src = `data:${block.mimeType};base64,${block.audioBase64}`;
+
+  function toggle() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-xl bg-zinc-100 px-4 py-3 dark:bg-zinc-800 group">
+      {/* Hidden audio element */}
+      <audio
+        ref={audioRef}
+        src={src}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => { setPlaying(false); setProgress(0); }}
+        onTimeUpdate={(e) => {
+          const a = e.currentTarget;
+          if (a.duration) setProgress(a.currentTime / a.duration);
+        }}
+      />
+
+      {/* Play/pause */}
+      <button
+        onClick={toggle}
+        className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700 transition-colors"
+      >
+        {playing ? (
+          <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+            <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+        )}
+      </button>
+
+      {/* Waveform bar */}
+      <div className="flex-1 flex flex-col gap-1">
+        <div className="h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-red-500 transition-all"
+            style={{ width: `${progress * 100}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[10px] text-zinc-400">
+          <span>Voice note</span>
+          <span>{formatDuration(block.duration)}</span>
+        </div>
+      </div>
+
+      {/* Delete */}
+      <button
+        onClick={onDelete}
+        className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-zinc-400 hover:text-red-500"
+        title="Delete voice note"
+      >
+        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}>
+          <path d="M18 6L6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+// ─── Insert Voice Note Button ─────────────────────────────────
+
+function InsertVoiceButton({
+  index,
+  recording,
+  elapsed,
+  activeIndex,
+  onStartRecord,
+  onStopRecord,
+}: {
+  index: number;
+  recording: boolean;
+  elapsed: number;
+  activeIndex: number | null;
+  onStartRecord: (index: number) => void;
+  onStopRecord: () => void;
+}) {
+  const isActive = activeIndex === index;
+
+  return (
+    <div className="flex items-center gap-2 py-1 group">
+      <div className="flex-1 h-px bg-zinc-100 dark:bg-zinc-800 group-hover:bg-zinc-200 dark:group-hover:bg-zinc-700 transition-colors" />
+      {isActive && recording ? (
+        <button
+          onClick={onStopRecord}
+          className="flex items-center gap-1.5 rounded-full bg-red-600 px-3 py-1.5 text-xs font-semibold text-white"
+        >
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-white opacity-75 animate-ping" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-white" />
+          </span>
+          {formatDuration(elapsed)} — tap to save
+        </button>
+      ) : (
+        <button
+          onClick={() => onStartRecord(index)}
+          disabled={recording}
+          className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity hover:border-red-300 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-20 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500"
+          title="Record a voice note here"
+        >
+          <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2}>
+            <rect x="9" y="2" width="6" height="11" rx="3" />
+            <path d="M5 10a7 7 0 0 0 14 0M12 19v3M9 22h6" />
+          </svg>
+          Voice note
+        </button>
+      )}
+      <div className="flex-1 h-px bg-zinc-100 dark:bg-zinc-800 group-hover:bg-zinc-200 dark:group-hover:bg-zinc-700 transition-colors" />
+    </div>
+  );
+}
+
+// ─── Auto-resize Textarea ─────────────────────────────────────
+
+function AutoTextarea({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = "auto";
+      ref.current.style.height = ref.current.scrollHeight + "px";
+    }
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={1}
+      className="w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder-zinc-300 dark:placeholder-zinc-600"
+      style={{ minHeight: "2rem" }}
+    />
+  );
+}
+
+// ─── Beat Badges ─────────────────────────────────────────────
+
+function BeatBadges({ fav }: { fav: Favorite }) {
+  const hasBeatInfo = fav.beatType || fav.bpm || fav.key || fav.inspiredBy.length > 0;
+  if (!hasBeatInfo) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1">
+      {fav.beatType && (
+        <span className="rounded-md bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
+          {fav.beatType}
+        </span>
+      )}
+      {fav.bpm && (
+        <span className="rounded-md bg-zinc-200 px-2 py-0.5 text-xs font-medium dark:bg-zinc-700">
+          {fav.bpm}
+        </span>
+      )}
+      {fav.key && (
+        <span className="rounded-md bg-zinc-200 px-2 py-0.5 text-xs font-medium dark:bg-zinc-700">
+          {fav.key}
+        </span>
+      )}
+      {fav.inspiredBy.length > 0 && (
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">
+          Inspired by{" "}
+          <span className="font-medium text-zinc-700 dark:text-zinc-300">
+            {fav.inspiredBy.join(", ")}
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────
+
+export default function NotesPage() {
+  const { videoId } = useParams<{ videoId: string }>();
+  const router = useRouter();
+
+  const [favorite, setFavorite] = useState<Favorite | null>(null);
+  const [blocks, setBlocks] = useState<Block[]>([{ id: nanoid(), type: "text", content: "" }]);
+  const [loading, setLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "unsaved">("saved");
+  const [activeRecordIndex, setActiveRecordIndex] = useState<number | null>(null);
+
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Load ──────────────────────────────────────────────────
+
+  useEffect(() => {
+    fetch(`/api/notes/${videoId}`)
+      .then((r) => {
+        if (r.status === 401) { router.replace("/?tab=favorites"); return null; }
+        if (r.status === 404) { router.replace("/?tab=favorites"); return null; }
+        return r.json();
+      })
+      .then((data) => {
+        if (!data) return;
+        setFavorite(data.favorite);
+        if (data.note?.blocks?.length) {
+          setBlocks(data.note.blocks as Block[]);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [videoId, router]);
+
+  // ── Auto-save ─────────────────────────────────────────────
+
+  const save = useCallback(
+    async (blocksToSave: Block[]) => {
+      setSaveStatus("saving");
+      try {
+        await fetch(`/api/notes/${videoId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ blocks: blocksToSave }),
+        });
+        setSaveStatus("saved");
+      } catch {
+        setSaveStatus("unsaved");
+      }
+    },
+    [videoId]
+  );
+
+  function scheduleSave(updated: Block[]) {
+    setSaveStatus("unsaved");
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => save(updated), 1200);
+  }
+
+  // ── Block ops ─────────────────────────────────────────────
+
+  function updateTextBlock(id: string, content: string) {
+    const updated = blocks.map((b) =>
+      b.id === id && b.type === "text" ? { ...b, content } : b
+    );
+    setBlocks(updated);
+    scheduleSave(updated);
+  }
+
+  function deleteBlock(id: string) {
+    const updated = blocks.filter((b) => b.id !== id);
+    const final =
+      updated.length === 0
+        ? [{ id: nanoid(), type: "text" as const, content: "" }]
+        : updated;
+    setBlocks(final);
+    scheduleSave(final);
+  }
+
+  function insertVoiceBlock(atIndex: number, audioBase64: string, mimeType: string, duration: number) {
+    const voiceBlock: VoiceBlock = {
+      id: nanoid(),
+      type: "voice",
+      audioBase64,
+      mimeType,
+      duration,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [
+      ...blocks.slice(0, atIndex),
+      voiceBlock,
+      { id: nanoid(), type: "text" as const, content: "" },
+      ...blocks.slice(atIndex),
+    ];
+    setBlocks(updated);
+    scheduleSave(updated);
+    setActiveRecordIndex(null);
+  }
+
+  // ── Recorder ─────────────────────────────────────────────
+
+  const recorder = useRecorder((base64, mimeType, duration) => {
+    if (activeRecordIndex !== null) {
+      insertVoiceBlock(activeRecordIndex, base64, mimeType, duration);
+    }
+  });
+
+  function handleStartRecord(index: number) {
+    setActiveRecordIndex(index);
+    recorder.start();
+  }
+
+  // ─────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <span className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-red-500" />
+      </div>
+    );
+  }
+
+  if (!favorite) return null;
+
+  return (
+    <div className="min-h-screen bg-white dark:bg-zinc-950">
+      {/* ── Sticky song header ── */}
+      <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
+        <div className="mx-auto max-w-2xl px-4 py-3 flex items-center gap-3">
+          <button
+            onClick={() => router.push("/?tab=favorites")}
+            className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path d="M19 12H5M12 5l-7 7 7 7" />
+            </svg>
+          </button>
+
+          <img
+            src={favorite.thumbnail}
+            alt=""
+            className="flex-shrink-0 h-12 w-20 rounded-md object-cover"
+          />
+
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold leading-tight truncate">{favorite.title}</p>
+            <BeatBadges fav={favorite} />
+          </div>
+
+          <div className="flex-shrink-0 flex items-center gap-2">
+            <span className={`text-[10px] transition-colors ${
+              saveStatus === "saving" ? "text-zinc-400" :
+              saveStatus === "unsaved" ? "text-amber-500" :
+              "text-zinc-300 dark:text-zinc-600"
+            }`}>
+              {saveStatus === "saving" ? "Saving…" : saveStatus === "unsaved" ? "Unsaved" : "Saved"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Editor ── */}
+      <div className="mx-auto max-w-2xl px-4 py-8 space-y-1">
+        {blocks.map((block, i) => (
+          <div key={block.id}>
+            <InsertVoiceButton
+              index={i}
+              recording={recorder.recording}
+              elapsed={recorder.elapsed}
+              activeIndex={activeRecordIndex}
+              onStartRecord={handleStartRecord}
+              onStopRecord={recorder.stop}
+            />
+            {block.type === "text" ? (
+              <AutoTextarea
+                value={block.content}
+                onChange={(v) => updateTextBlock(block.id, v)}
+                placeholder={i === 0 ? "Write your lyrics here…" : "Continue writing…"}
+              />
+            ) : (
+              <VoicePlayer block={block} onDelete={() => deleteBlock(block.id)} />
+            )}
+          </div>
+        ))}
+        <InsertVoiceButton
+          index={blocks.length}
+          recording={recorder.recording}
+          elapsed={recorder.elapsed}
+          activeIndex={activeRecordIndex}
+          onStartRecord={handleStartRecord}
+          onStopRecord={recorder.stop}
+        />
+      </div>
+    </div>
+  );
+}

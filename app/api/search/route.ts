@@ -8,6 +8,19 @@ import { getSession } from "@/app/lib/session";
 
 export const maxDuration = 60;
 
+function computeDateAfter(filter: string): string {
+  const d = new Date();
+  switch (filter) {
+    case "year":    d.setFullYear(d.getFullYear() - 1); break;
+    case "6months": d.setMonth(d.getMonth() - 6); break;
+    case "1month":  d.setMonth(d.getMonth() - 1); break;
+    case "2weeks":  d.setDate(d.getDate() - 14); break;
+    case "1week":   d.setDate(d.getDate() - 7); break;
+    case "1day":    d.setDate(d.getDate() - 1); break;
+  }
+  return d.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
 export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session?.userId) {
@@ -15,6 +28,7 @@ export async function GET(request: NextRequest) {
   }
 
   const query = request.nextUrl.searchParams.get("q");
+  const dateFilter = request.nextUrl.searchParams.get("dateFilter");
 
   if (!query || !query.trim()) {
     return Response.json({ error: "Missing search query" }, { status: 400 });
@@ -22,21 +36,24 @@ export async function GET(request: NextRequest) {
 
   const ytdlp = getYtDlpPath();
 
-  try {
-    // Use --dump-json for reliable structured output
-    const { stdout } = await execFileAsync(
-      ytdlp,
-      [
-        `ytsearch10:${query.trim()}`,
-        "--dump-json",
-        "--no-download",
-        "--no-playlist",
-        "--no-warnings",
-      ],
-      { timeout: 30000, maxBuffer: 50 * 1024 * 1024 }
-    );
+  const args = [
+    `ytsearch15:${query.trim()}`,
+    "--dump-json",
+    "--no-download",
+    "--no-playlist",
+    "--no-warnings",
+  ];
 
-    // Each line is a separate JSON object
+  if (dateFilter) {
+    args.push("--dateafter", computeDateAfter(dateFilter));
+  }
+
+  try {
+    const { stdout } = await execFileAsync(ytdlp, args, {
+      timeout: 30000,
+      maxBuffer: 50 * 1024 * 1024,
+    });
+
     const lines = stdout.trim().split("\n").filter(Boolean);
 
     const results = lines.map((line) => {
@@ -62,10 +79,7 @@ export async function GET(request: NextRequest) {
 
     return Response.json({ results });
   } catch {
-    return Response.json(
-      { error: "Search failed" },
-      { status: 500 }
-    );
+    return Response.json({ error: "Search failed" }, { status: 500 });
   }
 }
 

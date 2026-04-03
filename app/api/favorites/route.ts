@@ -23,7 +23,11 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const { videoId, title, thumbnail, duration, durationSec, url, bpm, key, beatType, inspiredBy, tags } = body;
+  const {
+    videoId, title, thumbnail, duration, durationSec, url,
+    bpm, key, beatType, inspiredBy, tags,
+    dateFilter, freeFilter, artistFilter, typeBeat,
+  } = body;
 
   if (!videoId || !title || !url) {
     return Response.json({ error: "Missing required fields" }, { status: 400 });
@@ -44,6 +48,10 @@ export async function POST(request: NextRequest) {
       beatType: beatType ?? null,
       inspiredBy: inspiredBy ?? [],
       tags: tags ?? [],
+      dateFilter: dateFilter ?? null,
+      freeFilter: freeFilter ?? false,
+      artistFilter: artistFilter ?? null,
+      typeBeat: typeBeat ?? false,
     },
     update: {},
   });

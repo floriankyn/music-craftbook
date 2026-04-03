@@ -7,6 +7,8 @@ import { Suspense } from "react";
 type Format = "mp3" | "mp4" | "wav";
 type Tab = "download" | "search" | "favorites";
 type AuthMode = "login" | "signup";
+type DateFilter = "year" | "6months" | "1month" | "2weeks" | "1week" | "1day";
+type ArtistFilter = "Lil Peep" | "Juice WRLD";
 
 interface BeatAnalysis {
   title: string;
@@ -25,11 +27,41 @@ interface SearchResult extends BeatAnalysis {
   thumbnail: string;
 }
 
+interface SavedFilters {
+  dateFilter: DateFilter | null;
+  freeFilter: boolean;
+  artistFilter: ArtistFilter | null;
+  typeBeat: boolean;
+}
+
+interface FavoriteItem extends SearchResult {
+  savedFilters: SavedFilters;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────
 
 function extractVideoId(url: string): string | null {
   const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/);
   return match ? match[1] : null;
+}
+
+function buildSearchQuery(
+  text: string,
+  artist: ArtistFilter | null,
+  typeBeat: boolean,
+  free: boolean
+): string {
+  let q = text.trim();
+
+  if (artist) {
+    q = q ? `${q} ${artist} type beat` : `${artist} type beat`;
+  } else if (typeBeat) {
+    q = q ? `${q} type beat` : "type beat";
+  }
+
+  if (free) q = q ? `${q} free` : "free";
+
+  return q;
 }
 
 // ─── Audio Preview Hook ───────────────────────────────────────
@@ -41,10 +73,7 @@ function usePreviewPlayer() {
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const stop = useCallback(() => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
@@ -56,51 +85,33 @@ function usePreviewPlayer() {
 
   const play = useCallback(
     (id: string, url: string) => {
-      if (playingId === id || loadingId === id) {
-        stop();
-        return;
-      }
-
+      if (playingId === id || loadingId === id) { stop(); return; }
       stop();
       setLoadingId(id);
 
       const abort = new AbortController();
       abortRef.current = abort;
 
-      const params = new URLSearchParams({ url });
-      fetch(`/api/preview?${params.toString()}`, { signal: abort.signal })
-        .then((res) => {
-          if (!res.ok) throw new Error("Preview failed");
-          return res.blob();
-        })
+      fetch(`/api/preview?${new URLSearchParams({ url })}`, { signal: abort.signal })
+        .then((res) => { if (!res.ok) throw new Error("Preview failed"); return res.blob(); })
         .then((blob) => {
           if (abort.signal.aborted) return;
-
           const objectUrl = URL.createObjectURL(blob);
           const audio = new Audio(objectUrl);
           audioRef.current = audio;
-
           audio.addEventListener("ended", () => {
-            setPlayingId(null);
-            audioRef.current = null;
-            URL.revokeObjectURL(objectUrl);
+            setPlayingId(null); audioRef.current = null; URL.revokeObjectURL(objectUrl);
           }, { once: true });
-
           audio.addEventListener("error", () => {
-            setLoadingId(null);
-            setPlayingId(null);
-            audioRef.current = null;
-            URL.revokeObjectURL(objectUrl);
+            setLoadingId(null); setPlayingId(null); audioRef.current = null; URL.revokeObjectURL(objectUrl);
           }, { once: true });
-
           setLoadingId(null);
           setPlayingId(id);
           audio.play().catch(() => {});
         })
         .catch((err) => {
           if (err instanceof DOMException && err.name === "AbortError") return;
-          setLoadingId(null);
-          setPlayingId(null);
+          setLoadingId(null); setPlayingId(null);
         });
     },
     [playingId, loadingId, stop]
@@ -109,10 +120,7 @@ function usePreviewPlayer() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
     };
   }, []);
 
@@ -124,9 +132,7 @@ function usePreviewPlayer() {
 function BeatBadges({ analysis }: { analysis: BeatAnalysis }) {
   const hasBeatInfo =
     analysis.beatType || analysis.bpm || analysis.key || analysis.inspiredBy.length > 0;
-
   if (!hasBeatInfo) return null;
-
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
@@ -160,34 +166,19 @@ function BeatBadges({ analysis }: { analysis: BeatAnalysis }) {
 
 // ─── Star Button ──────────────────────────────────────────────
 
-function StarButton({
-  favorited,
-  onToggle,
-}: {
-  favorited: boolean;
-  onToggle: () => void;
-}) {
+function StarButton({ favorited, onToggle }: { favorited: boolean; onToggle: () => void }) {
   const [burst, setBurst] = useState(false);
 
   function handleClick() {
-    if (!favorited) {
-      setBurst(true);
-      setTimeout(() => setBurst(false), 300);
-    }
+    if (!favorited) { setBurst(true); setTimeout(() => setBurst(false), 300); }
     onToggle();
   }
 
   return (
-    <button
-      onClick={handleClick}
-      title={favorited ? "Remove from favorites" : "Add to favorites"}
-      className="flex-shrink-0 focus:outline-none"
-    >
+    <button onClick={handleClick} title={favorited ? "Remove from favorites" : "Add to favorites"} className="flex-shrink-0 focus:outline-none">
       <svg
         viewBox="0 0 24 24"
-        className={`transition-all duration-200 ${
-          burst ? "scale-150" : favorited ? "scale-125" : "scale-100"
-        } ${favorited ? "text-yellow-400" : "text-zinc-300 dark:text-zinc-600"}`}
+        className={`transition-all duration-200 ${burst ? "scale-150" : favorited ? "scale-125" : "scale-100"} ${favorited ? "text-yellow-400" : "text-zinc-300 dark:text-zinc-600"}`}
         style={{ width: 20, height: 20 }}
         fill={favorited ? "currentColor" : "none"}
         stroke="currentColor"
@@ -196,6 +187,111 @@ function StarButton({
         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
       </svg>
     </button>
+  );
+}
+
+// ─── Search Filters ───────────────────────────────────────────
+
+const DATE_OPTIONS: { value: DateFilter; label: string }[] = [
+  { value: "year",    label: "Year"   },
+  { value: "6months", label: "6M"     },
+  { value: "1month",  label: "1M"     },
+  { value: "2weeks",  label: "2W"     },
+  { value: "1week",   label: "1W"     },
+  { value: "1day",    label: "Today"  },
+];
+
+const ARTIST_OPTIONS: ArtistFilter[] = ["Lil Peep", "Juice WRLD"];
+
+function FilterPill({
+  active,
+  onClick,
+  children,
+  color = "zinc",
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  color?: "zinc" | "red" | "green" | "purple";
+}) {
+  const activeColors: Record<string, string> = {
+    zinc:   "bg-zinc-800 text-white border-zinc-800 dark:bg-zinc-200 dark:text-zinc-900 dark:border-zinc-200",
+    red:    "bg-red-500 text-white border-red-500",
+    green:  "bg-green-500 text-white border-green-500",
+    purple: "bg-purple-500 text-white border-purple-500",
+  };
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+        active
+          ? activeColors[color]
+          : "border-zinc-300 text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SearchFilters({
+  dateFilter, setDateFilter,
+  freeFilter, setFreeFilter,
+  artistFilter, setArtistFilter,
+  typeBeat, setTypeBeat,
+}: {
+  dateFilter: DateFilter | null;
+  setDateFilter: (v: DateFilter | null) => void;
+  freeFilter: boolean;
+  setFreeFilter: (v: boolean) => void;
+  artistFilter: ArtistFilter | null;
+  setArtistFilter: (v: ArtistFilter | null) => void;
+  typeBeat: boolean;
+  setTypeBeat: (v: boolean) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {/* Row 1: date + free */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 w-10 shrink-0">Date</span>
+        {DATE_OPTIONS.map((o) => (
+          <FilterPill
+            key={o.value}
+            active={dateFilter === o.value}
+            onClick={() => setDateFilter(dateFilter === o.value ? null : o.value)}
+          >
+            {o.label}
+          </FilterPill>
+        ))}
+        <div className="ml-auto">
+          <FilterPill active={freeFilter} color="green" onClick={() => setFreeFilter(!freeFilter)}>
+            Free
+          </FilterPill>
+        </div>
+      </div>
+
+      {/* Row 2: artist presets */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 w-10 shrink-0">Artist</span>
+        {ARTIST_OPTIONS.map((a) => (
+          <FilterPill
+            key={a}
+            active={artistFilter === a}
+            color="purple"
+            onClick={() => setArtistFilter(artistFilter === a ? null : a)}
+          >
+            {a}
+          </FilterPill>
+        ))}
+        <FilterPill
+          active={typeBeat}
+          color="red"
+          onClick={() => setTypeBeat(!typeBeat)}
+        >
+          Type beat
+        </FilterPill>
+      </div>
+    </div>
   );
 }
 
@@ -212,7 +308,6 @@ function AuthForm({ onSuccess }: { onSuccess: (user: { id: string }) => void }) 
     e.preventDefault();
     setError("");
     setLoading(true);
-
     try {
       const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/signup";
       const res = await fetch(endpoint, {
@@ -221,16 +316,10 @@ function AuthForm({ onSuccess }: { onSuccess: (user: { id: string }) => void }) 
         body: JSON.stringify({ email, password }),
       });
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Something went wrong");
-      }
-
+      if (!res.ok) throw new Error(data.error || "Something went wrong");
       const meRes = await fetch("/api/auth/me");
       const meData = await meRes.json();
-      if (meData.user) {
-        onSuccess(meData.user);
-      }
+      if (meData.user) onSuccess(meData.user);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -250,82 +339,33 @@ function AuthForm({ onSuccess }: { onSuccess: (user: { id: string }) => void }) 
             : "Sign up for free to unlock YouTube search."}
         </p>
       </div>
-
       <form onSubmit={handleSubmit} className="space-y-3">
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-600 dark:bg-zinc-900"
-        />
-        <input
-          type="password"
-          placeholder={mode === "signup" ? "Password (min. 8 characters)" : "Password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-600 dark:bg-zinc-900"
-        />
-
-        {error && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950 dark:text-red-400">
-            {error}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
-        >
-          {loading
-            ? "Please wait..."
-            : mode === "login"
-            ? "Sign in"
-            : "Create account"}
+        <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required
+          className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-600 dark:bg-zinc-900" />
+        <input type="password" placeholder={mode === "signup" ? "Password (min. 8 characters)" : "Password"}
+          value={password} onChange={(e) => setPassword(e.target.value)} required
+          className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-600 dark:bg-zinc-900" />
+        {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950 dark:text-red-400">{error}</p>}
+        <button type="submit" disabled={loading}
+          className="w-full rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 transition-colors">
+          {loading ? "Please wait..." : mode === "login" ? "Sign in" : "Create account"}
         </button>
       </form>
-
       <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
         {mode === "login" ? (
-          <>
-            No account?{" "}
-            <button
-              onClick={() => { setMode("signup"); setError(""); }}
-              className="font-medium text-red-600 hover:underline"
-            >
-              Sign up
-            </button>
-          </>
+          <>No account?{" "}<button onClick={() => { setMode("signup"); setError(""); }} className="font-medium text-red-600 hover:underline">Sign up</button></>
         ) : (
-          <>
-            Already have an account?{" "}
-            <button
-              onClick={() => { setMode("login"); setError(""); }}
-              className="font-medium text-red-600 hover:underline"
-            >
-              Sign in
-            </button>
-          </>
+          <>Already have an account?{" "}<button onClick={() => { setMode("login"); setError(""); }} className="font-medium text-red-600 hover:underline">Sign in</button></>
         )}
       </p>
     </div>
   );
 }
 
-// ─── Search Result Card ───────────────────────────────────────
+// ─── Result Card ──────────────────────────────────────────────
 
 function ResultCard({
-  result,
-  playingId,
-  loadingId,
-  onPlay,
-  onDownload,
-  downloading,
-  favorited,
-  onToggleFavorite,
+  result, playingId, loadingId, onPlay, onDownload, downloading, favorited, onToggleFavorite, onSearchWithFilters, onNotes,
 }: {
   result: SearchResult;
   playingId: string | null;
@@ -335,6 +375,8 @@ function ResultCard({
   downloading: string | null;
   favorited: boolean;
   onToggleFavorite: (result: SearchResult) => void;
+  onSearchWithFilters?: () => void;
+  onNotes?: () => void;
 }) {
   const isPlaying = playingId === result.id;
   const isLoading = loadingId === result.id;
@@ -352,8 +394,7 @@ function ResultCard({
             <span className="h-8 w-8 animate-spin rounded-full border-2 border-white/40 border-t-white" />
           ) : isPlaying ? (
             <svg className="h-8 w-8 text-white" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="4" width="4" height="16" />
-              <rect x="14" y="4" width="4" height="16" />
+              <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
             </svg>
           ) : (
             <svg className="h-8 w-8 text-white" fill="currentColor" viewBox="0 0 24 24">
@@ -361,9 +402,11 @@ function ResultCard({
             </svg>
           )}
         </div>
-        <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
-          {result.duration}
-        </span>
+        {result.duration && (
+          <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
+            {result.duration}
+          </span>
+        )}
       </button>
 
       <div className="flex flex-1 flex-col justify-between min-w-0">
@@ -372,32 +415,52 @@ function ResultCard({
             <p className="text-sm font-semibold leading-tight line-clamp-2" title={result.title}>
               {result.title}
             </p>
-            <StarButton
-              favorited={favorited}
-              onToggle={() => onToggleFavorite(result)}
-            />
+            <StarButton favorited={favorited} onToggle={() => onToggleFavorite(result)} />
           </div>
           <BeatBadges analysis={result} />
           {result.tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {result.tags.slice(0, 4).map((tag, i) => (
-                <span
-                  key={i}
-                  className="rounded-full bg-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400"
-                >
+                <span key={i} className="rounded-full bg-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
                   {tag}
                 </span>
               ))}
             </div>
           )}
         </div>
-        <button
-          onClick={() => onDownload(result.id)}
-          disabled={isDownloading}
-          className="mt-2 self-start rounded-md bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
-        >
-          {isDownloading ? "Downloading..." : "Download"}
-        </button>
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            onClick={() => onDownload(result.id)}
+            disabled={isDownloading}
+            className="self-start rounded-md bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+          >
+            {isDownloading ? "Downloading..." : "Download WAV"}
+          </button>
+          {onSearchWithFilters && (
+            <button
+              onClick={onSearchWithFilters}
+              title="Search YouTube with the same filters"
+              className="flex items-center gap-1 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+              </svg>
+              Find more
+            </button>
+          )}
+          {onNotes && (
+            <button
+              onClick={onNotes}
+              title="Open lyrics & notes"
+              className="flex items-center gap-1 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                <path d="M12 20h9M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 19.635a2 2 0 0 1-.855.506l-2.872.834a.5.5 0 0 1-.62-.62l.834-2.872a2 2 0 0 1 .506-.854z"/>
+              </svg>
+              Notes
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -410,42 +473,41 @@ function DownloaderForm() {
   const router = useRouter();
 
   const [tab, setTab] = useState<Tab>(
-    searchParams.get("tab") === "search"
-      ? "search"
-      : searchParams.get("tab") === "favorites"
-      ? "favorites"
-      : "download"
+    searchParams.get("tab") === "search" ? "search"
+    : searchParams.get("tab") === "favorites" ? "favorites"
+    : "download"
   );
   const [url, setUrl] = useState("");
-  const [format, setFormat] = useState<Format>(
-    (searchParams.get("format") as Format) || "mp3"
-  );
+  const [format, setFormat] = useState<Format>((searchParams.get("format") as Format) || "mp3");
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
 
-  // Auth state
+  // Auth
   const [user, setUser] = useState<{ id: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // Single URL analysis
+  // URL analysis
   const [analysis, setAnalysis] = useState<BeatAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const analyzeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Search
   const [searchQuery, setSearchQuery] = useState("");
+  const [dateFilter, setDateFilter] = useState<DateFilter | null>(null);
+  const [freeFilter, setFreeFilter] = useState(false);
+  const [artistFilter, setArtistFilter] = useState<ArtistFilter | null>(null);
+  const [typeBeat, setTypeBeat] = useState(false);
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [downloadingResult, setDownloadingResult] = useState<string | null>(null);
 
   // Favorites
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
-  const [favorites, setFavorites] = useState<SearchResult[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [downloadingFav, setDownloadingFav] = useState<string | null>(null);
 
   const { playingId, loadingId, play, stop } = usePreviewPlayer();
 
-  // Check auth on mount
   useEffect(() => {
     fetch("/api/auth/me")
       .then((r) => r.json())
@@ -453,33 +515,29 @@ function DownloaderForm() {
       .finally(() => setAuthLoading(false));
   }, []);
 
-  // Load favorites when user is known
   useEffect(() => {
-    if (!user) {
-      setFavoriteIds(new Set());
-      setFavorites([]);
-      return;
-    }
+    if (!user) { setFavoriteIds(new Set()); setFavorites([]); return; }
     fetch("/api/favorites")
       .then((r) => r.json())
       .then((data) => {
-        const favs: SearchResult[] = (data.favorites ?? []).map((f: {
+        const favs: FavoriteItem[] = (data.favorites ?? []).map((f: {
           videoId: string; title: string; thumbnail: string;
           duration: string; durationSec: number; url: string;
           bpm: string | null; key: string | null; beatType: string | null;
           inspiredBy: string[]; tags: string[];
+          dateFilter: string | null; freeFilter: boolean;
+          artistFilter: string | null; typeBeat: boolean;
         }) => ({
-          id: f.videoId,
-          title: f.title,
-          thumbnail: f.thumbnail,
-          duration: f.duration,
-          durationSec: f.durationSec,
-          url: f.url,
-          bpm: f.bpm,
-          key: f.key,
-          beatType: f.beatType,
-          inspiredBy: f.inspiredBy,
-          tags: f.tags,
+          id: f.videoId, title: f.title, thumbnail: f.thumbnail,
+          duration: f.duration, durationSec: f.durationSec, url: f.url,
+          bpm: f.bpm, key: f.key, beatType: f.beatType,
+          inspiredBy: f.inspiredBy, tags: f.tags,
+          savedFilters: {
+            dateFilter: (f.dateFilter as DateFilter | null),
+            freeFilter: f.freeFilter,
+            artistFilter: (f.artistFilter as ArtistFilter | null),
+            typeBeat: f.typeBeat,
+          },
         }));
         setFavorites(favs);
         setFavoriteIds(new Set(favs.map((f) => f.id)));
@@ -487,180 +545,114 @@ function DownloaderForm() {
       .catch(() => {});
   }, [user]);
 
-  // Sync tab + format to URL
   useEffect(() => {
     const params = new URLSearchParams();
     params.set("tab", tab);
-    params.set("format", format);
+    if (tab === "download") params.set("format", format);
     router.replace(`?${params.toString()}`, { scroll: false });
   }, [tab, format, router]);
 
-  // Auto-analyze pasted URL
   useEffect(() => {
     if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
     setAnalysis(null);
-
-    const isYouTube =
-      /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)/.test(
-        url.trim()
-      );
-
+    const isYouTube = /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)/.test(url.trim());
     if (!isYouTube) return;
-
-    analyzeTimer.current = setTimeout(() => {
-      analyzeUrl(url.trim());
-    }, 500);
-
-    return () => {
-      if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
-    };
+    analyzeTimer.current = setTimeout(() => analyzeUrl(url.trim()), 500);
+    return () => { if (analyzeTimer.current) clearTimeout(analyzeTimer.current); };
   }, [url]);
 
   async function analyzeUrl(videoUrl: string) {
-    setAnalyzing(true);
-    setError("");
+    setAnalyzing(true); setError("");
     try {
-      const params = new URLSearchParams({ url: videoUrl });
-      const res = await fetch(`/api/analyze?${params.toString()}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Analysis failed");
-      }
-      const data: BeatAnalysis = await res.json();
-      setAnalysis(data);
+      const res = await fetch(`/api/analyze?${new URLSearchParams({ url: videoUrl })}`);
+      if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.error || "Analysis failed"); }
+      setAnalysis(await res.json());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Analysis failed");
-    } finally {
-      setAnalyzing(false);
-    }
+    } finally { setAnalyzing(false); }
   }
 
   async function handleDownload() {
-    if (!url.trim()) {
-      setError("Please paste a YouTube URL");
-      return;
-    }
-    setError("");
-    setDownloading(true);
+    if (!url.trim()) { setError("Please paste a YouTube URL"); return; }
+    setError(""); setDownloading(true);
     try {
-      const params = new URLSearchParams({ url, format });
-      const res = await fetch(`/api/download?${params.toString()}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || `Download failed (${res.status})`);
-      }
+      const res = await fetch(`/api/download?${new URLSearchParams({ url, format })}`);
+      if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.error || `Download failed (${res.status})`); }
       const disposition = res.headers.get("Content-Disposition") || "";
       const match = disposition.match(/filename="(.+)"/);
-      const filename = match ? match[1] : `video.${format}`;
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      a.download = match ? match[1] : `video.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(a.href);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed");
-    } finally {
-      setDownloading(false);
-    }
+    } finally { setDownloading(false); }
   }
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
-    stop();
-    setSearching(true);
-    setError("");
-    setResults([]);
+    const q = buildSearchQuery(searchQuery, artistFilter, typeBeat, freeFilter);
+    if (!q) return;
+    stop(); setSearching(true); setError(""); setResults([]);
     try {
-      const params = new URLSearchParams({ q: searchQuery });
-      const res = await fetch(`/api/search?${params.toString()}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Search failed");
-      }
+      const params = new URLSearchParams({ q });
+      if (dateFilter) params.set("dateFilter", dateFilter);
+      const res = await fetch(`/api/search?${params}`);
+      if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.error || "Search failed"); }
       const data = await res.json();
       setResults(data.results || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Search failed");
-    } finally {
-      setSearching(false);
-    }
+    } finally { setSearching(false); }
+  }
+
+  async function downloadBlob(url: string, fallbackName: string) {
+    const res = await fetch(`/api/download?${new URLSearchParams({ url, format: "wav" })}`);
+    if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.error || "Download failed"); }
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="(.+)"/);
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = match ? match[1] : fallbackName;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
   }
 
   async function handleDownloadResult(id: string) {
     const result = results.find((r) => r.id === id);
     if (!result) return;
     setDownloadingResult(id);
-    try {
-      const params = new URLSearchParams({ url: result.url, format });
-      const res = await fetch(`/api/download?${params.toString()}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Download failed");
-      }
-      const disposition = res.headers.get("Content-Disposition") || "";
-      const match = disposition.match(/filename="(.+)"/);
-      const filename = match ? match[1] : `${result.title}.${format}`;
-      const blob = await res.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(a.href);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Download failed");
-    } finally {
-      setDownloadingResult(null);
-    }
+    try { await downloadBlob(result.url, `${result.title}.wav`); }
+    catch (e) { setError(e instanceof Error ? e.message : "Download failed"); }
+    finally { setDownloadingResult(null); }
   }
 
   async function handleDownloadFavorite(id: string) {
     const result = favorites.find((r) => r.id === id);
     if (!result) return;
     setDownloadingFav(id);
-    try {
-      const params = new URLSearchParams({ url: result.url, format });
-      const res = await fetch(`/api/download?${params.toString()}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Download failed");
-      }
-      const disposition = res.headers.get("Content-Disposition") || "";
-      const match = disposition.match(/filename="(.+)"/);
-      const filename = match ? match[1] : `${result.title}.${format}`;
-      const blob = await res.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(a.href);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Download failed");
-    } finally {
-      setDownloadingFav(null);
-    }
+    try { await downloadBlob(result.url, `${result.title}.wav`); }
+    catch (e) { setError(e instanceof Error ? e.message : "Download failed"); }
+    finally { setDownloadingFav(null); }
   }
 
-  async function handleToggleFavorite(result: SearchResult) {
+  async function handleToggleFavorite(result: SearchResult, filters?: SavedFilters) {
     if (!user) return;
     const isFav = favoriteIds.has(result.id);
-
-    // Optimistic update
+    const savedFilters: SavedFilters = filters ?? {
+      dateFilter, freeFilter, artistFilter, typeBeat,
+    };
+    const favItem: FavoriteItem = { ...result, savedFilters };
     if (isFav) {
-      setFavoriteIds((prev) => { const s = new Set(prev); s.delete(result.id); return s; });
-      setFavorites((prev) => prev.filter((f) => f.id !== result.id));
+      setFavoriteIds((p) => { const s = new Set(p); s.delete(result.id); return s; });
+      setFavorites((p) => p.filter((f) => f.id !== result.id));
     } else {
-      setFavoriteIds((prev) => new Set(prev).add(result.id));
-      setFavorites((prev) => [result, ...prev]);
+      setFavoriteIds((p) => new Set(p).add(result.id));
+      setFavorites((p) => [favItem, ...p]);
     }
-
     try {
       if (isFav) {
         await fetch(`/api/favorites?videoId=${result.id}`, { method: "DELETE" });
@@ -669,38 +661,31 @@ function DownloaderForm() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            videoId: result.id,
-            title: result.title,
-            thumbnail: result.thumbnail,
-            duration: result.duration,
-            durationSec: result.durationSec,
-            url: result.url,
-            bpm: result.bpm,
-            key: result.key,
-            beatType: result.beatType,
-            inspiredBy: result.inspiredBy,
-            tags: result.tags,
+            videoId: result.id, title: result.title, thumbnail: result.thumbnail,
+            duration: result.duration, durationSec: result.durationSec, url: result.url,
+            bpm: result.bpm, key: result.key, beatType: result.beatType,
+            inspiredBy: result.inspiredBy, tags: result.tags,
+            dateFilter: savedFilters.dateFilter,
+            freeFilter: savedFilters.freeFilter,
+            artistFilter: savedFilters.artistFilter,
+            typeBeat: savedFilters.typeBeat,
           }),
         });
       }
     } catch {
-      // Rollback on error
       if (isFav) {
-        setFavoriteIds((prev) => new Set(prev).add(result.id));
-        setFavorites((prev) => [result, ...prev]);
+        setFavoriteIds((p) => new Set(p).add(result.id));
+        setFavorites((p) => [favItem, ...p]);
       } else {
-        setFavoriteIds((prev) => { const s = new Set(prev); s.delete(result.id); return s; });
-        setFavorites((prev) => prev.filter((f) => f.id !== result.id));
+        setFavoriteIds((p) => { const s = new Set(p); s.delete(result.id); return s; });
+        setFavorites((p) => p.filter((f) => f.id !== result.id));
       }
     }
   }
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
-    setUser(null);
-    setResults([]);
-    setFavorites([]);
-    setFavoriteIds(new Set());
+    setUser(null); setResults([]); setFavorites([]); setFavoriteIds(new Set());
     stop();
     if (tab === "favorites") setTab("download");
   }
@@ -711,6 +696,8 @@ function DownloaderForm() {
     { value: "wav", label: "WAV" },
   ];
 
+  const hasActiveFilters = !!(dateFilter || freeFilter || artistFilter || typeBeat);
+
   return (
     <div className="flex flex-col items-center flex-1 px-4 py-8">
       <div className="w-full max-w-2xl space-y-6">
@@ -718,58 +705,29 @@ function DownloaderForm() {
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">YouTube Downloader</h1>
           {!authLoading && user && (
-            <button
-              onClick={handleLogout}
-              className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
-            >
+            <button onClick={handleLogout} className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors">
               Sign out
             </button>
           )}
         </div>
 
-        {/* Tab switcher */}
+        {/* Tabs */}
         <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-700 overflow-hidden">
-          <button
-            onClick={() => { setTab("download"); setError(""); }}
-            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
-              tab === "download"
-                ? "bg-red-500 text-white"
-                : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            }`}
-          >
-            Paste URL
-          </button>
-          <button
-            onClick={() => { setTab("search"); setError(""); }}
-            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
-              tab === "search"
-                ? "bg-red-500 text-white"
-                : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            }`}
-          >
-            Search YouTube
-          </button>
+          {(["download", "search"] as Tab[]).map((t) => (
+            <button key={t} onClick={() => { setTab(t); setError(""); }}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${tab === t ? "bg-red-500 text-white" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
+              {t === "download" ? "Paste URL" : "Search YouTube"}
+            </button>
+          ))}
           {user && (
-            <button
-              onClick={() => { setTab("favorites"); setError(""); }}
-              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${
-                tab === "favorites"
-                  ? "bg-red-500 text-white"
-                  : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              }`}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                className={`w-3.5 h-3.5 ${tab === "favorites" ? "text-yellow-300" : "text-yellow-400"}`}
-                fill="currentColor"
-              >
+            <button onClick={() => { setTab("favorites"); setError(""); }}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${tab === "favorites" ? "bg-red-500 text-white" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
+              <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 ${tab === "favorites" ? "text-yellow-300" : "text-yellow-400"}`} fill="currentColor">
                 <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
               </svg>
               Favorites
               {favoriteIds.size > 0 && (
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${
-                  tab === "favorites" ? "bg-white/20 text-white" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400"
-                }`}>
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${tab === "favorites" ? "bg-white/20 text-white" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400"}`}>
                   {favoriteIds.size}
                 </span>
               )}
@@ -777,33 +735,22 @@ function DownloaderForm() {
           )}
         </div>
 
-        {/* Format selector (shared) */}
-        <div className="flex gap-2">
-          {formats.map((f) => (
-            <button
-              key={f.value}
-              onClick={() => setFormat(f.value)}
-              className={`flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-                format === f.value
-                  ? "border-red-500 bg-red-500 text-white"
-                  : "border-zinc-300 hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-600"
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-
         {/* ── Download Tab ── */}
         {tab === "download" && (
           <>
-            <input
-              type="text"
-              placeholder="Paste YouTube URL here..."
-              value={url}
+            {/* Format selector — download tab only */}
+            <div className="flex gap-2">
+              {formats.map((f) => (
+                <button key={f.value} onClick={() => setFormat(f.value)}
+                  className={`flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${format === f.value ? "border-red-500 bg-red-500 text-white" : "border-zinc-300 hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-600"}`}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <input type="text" placeholder="Paste YouTube URL here..." value={url}
               onChange={(e) => setUrl(e.target.value)}
-              className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-700 dark:bg-zinc-900"
-            />
+              className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-700 dark:bg-zinc-900" />
 
             {analyzing && (
               <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-5 py-4 dark:border-zinc-700 dark:bg-zinc-800/50">
@@ -817,42 +764,23 @@ function DownloaderForm() {
             {analysis && !analyzing && (() => {
               const videoId = extractVideoId(url.trim());
               const asResult: SearchResult | null = videoId ? {
-                id: videoId,
-                url: url.trim(),
-                title: analysis.title,
+                id: videoId, url: url.trim(), title: analysis.title,
                 thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                duration: "",
-                durationSec: 0,
-                bpm: analysis.bpm,
-                key: analysis.key,
-                beatType: analysis.beatType,
-                inspiredBy: analysis.inspiredBy,
-                tags: analysis.tags,
+                duration: "", durationSec: 0,
+                bpm: analysis.bpm, key: analysis.key, beatType: analysis.beatType,
+                inspiredBy: analysis.inspiredBy, tags: analysis.tags,
               } : null;
-
               return (
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-5 py-4 space-y-3 dark:border-zinc-700 dark:bg-zinc-800/50">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="font-semibold text-sm truncate" title={analysis.title}>
-                      {analysis.title}
-                    </p>
-                    {user && asResult && (
-                      <StarButton
-                        favorited={favoriteIds.has(asResult.id)}
-                        onToggle={() => handleToggleFavorite(asResult)}
-                      />
-                    )}
+                    <p className="font-semibold text-sm truncate" title={analysis.title}>{analysis.title}</p>
+                    {user && asResult && <StarButton favorited={favoriteIds.has(asResult.id)} onToggle={() => handleToggleFavorite(asResult)} />}
                   </div>
                   <BeatBadges analysis={analysis} />
                   {analysis.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {analysis.tags.map((tag, i) => (
-                        <span
-                          key={i}
-                          className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400"
-                        >
-                          {tag}
-                        </span>
+                        <span key={i} className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400">{tag}</span>
                       ))}
                     </div>
                   )}
@@ -863,11 +791,8 @@ function DownloaderForm() {
               );
             })()}
 
-            <button
-              onClick={handleDownload}
-              disabled={downloading}
-              className="w-full rounded-lg bg-red-600 px-4 py-3 text-base font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            <button onClick={handleDownload} disabled={downloading}
+              className="w-full rounded-lg bg-red-600 px-4 py-3 text-base font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed">
               {downloading ? "Downloading..." : "Download"}
             </button>
           </>
@@ -884,32 +809,44 @@ function DownloaderForm() {
               <AuthForm onSuccess={setUser} />
             ) : (
               <>
+                <SearchFilters
+                  dateFilter={dateFilter} setDateFilter={setDateFilter}
+                  freeFilter={freeFilter} setFreeFilter={setFreeFilter}
+                  artistFilter={artistFilter} setArtistFilter={setArtistFilter}
+                  typeBeat={typeBeat} setTypeBeat={setTypeBeat}
+                />
+
                 <form onSubmit={handleSearch} className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Search beats, instrumentals, songs..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-700 dark:bg-zinc-900"
-                  />
-                  <button
-                    type="submit"
-                    disabled={searching}
-                    className="rounded-lg bg-red-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-                  >
-                    {searching ? (
-                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                    ) : (
-                      "Search"
-                    )}
+                  <input type="text" placeholder={
+                    artistFilter ? `${artistFilter} type beat…`
+                    : typeBeat ? "type beat…"
+                    : "Search beats, instrumentals, songs…"
+                  }
+                    value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                    className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-700 dark:bg-zinc-900" />
+                  <button type="submit" disabled={searching || (!searchQuery.trim() && !artistFilter && !typeBeat && !freeFilter)}
+                    className="rounded-lg bg-red-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50">
+                    {searching
+                      ? <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      : "Search"}
                   </button>
                 </form>
+
+                {hasActiveFilters && (
+                  <div className="flex items-center gap-2 text-xs text-zinc-400">
+                    <span>Searching for:</span>
+                    <span className="font-medium text-zinc-600 dark:text-zinc-300 italic">
+                      &ldquo;{buildSearchQuery(searchQuery, artistFilter, typeBeat, freeFilter) || "…"}&rdquo;
+                    </span>
+                    {dateFilter && <span className="text-zinc-400">· filtered by date</span>}
+                  </div>
+                )}
 
                 {searching && results.length === 0 && (
                   <div className="flex items-center justify-center py-12">
                     <div className="flex items-center gap-3 text-zinc-500 dark:text-zinc-400">
                       <span className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-red-500" />
-                      Searching and analyzing results...
+                      Searching and analyzing results…
                     </div>
                   </div>
                 )}
@@ -917,25 +854,15 @@ function DownloaderForm() {
                 {results.length > 0 && (
                   <div className="space-y-3">
                     {results.map((result) => (
-                      <ResultCard
-                        key={result.id}
-                        result={result}
-                        playingId={playingId}
-                        loadingId={loadingId}
-                        onPlay={play}
-                        onDownload={handleDownloadResult}
-                        downloading={downloadingResult}
-                        favorited={favoriteIds.has(result.id)}
-                        onToggleFavorite={handleToggleFavorite}
-                      />
+                      <ResultCard key={result.id} result={result} playingId={playingId} loadingId={loadingId}
+                        onPlay={play} onDownload={handleDownloadResult} downloading={downloadingResult}
+                        favorited={favoriteIds.has(result.id)} onToggleFavorite={handleToggleFavorite} />
                     ))}
                   </div>
                 )}
 
-                {!searching && results.length === 0 && searchQuery && (
-                  <p className="text-center text-sm text-zinc-400 py-8">
-                    No results. Try a different search.
-                  </p>
+                {!searching && results.length === 0 && (searchQuery || hasActiveFilters) && (
+                  <p className="text-center text-sm text-zinc-400 py-8">No results. Try a different search.</p>
                 )}
               </>
             )}
@@ -944,35 +871,42 @@ function DownloaderForm() {
 
         {/* ── Favorites Tab ── */}
         {tab === "favorites" && user && (
-          <>
-            {favorites.length === 0 ? (
-              <div className="flex flex-col items-center gap-3 py-16 text-zinc-400">
-                <svg viewBox="0 0 24 24" className="w-12 h-12 text-zinc-200 dark:text-zinc-700" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                </svg>
-                <p className="text-sm">No favorites yet.</p>
-                <p className="text-xs text-zinc-400">
-                  Search for videos and tap the star to save them here.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {favorites.map((result) => (
-                  <ResultCard
-                    key={result.id}
-                    result={result}
-                    playingId={playingId}
-                    loadingId={loadingId}
-                    onPlay={play}
-                    onDownload={handleDownloadFavorite}
-                    downloading={downloadingFav}
-                    favorited={true}
-                    onToggleFavorite={handleToggleFavorite}
-                  />
-                ))}
-              </div>
-            )}
-          </>
+          favorites.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 py-16 text-zinc-400">
+              <svg viewBox="0 0 24 24" className="w-12 h-12 text-zinc-200 dark:text-zinc-700" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              <p className="text-sm">No favorites yet.</p>
+              <p className="text-xs">Search for videos and tap the star to save them here.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {favorites.map((result) => (
+                <ResultCard
+                  key={result.id}
+                  result={result}
+                  playingId={playingId}
+                  loadingId={loadingId}
+                  onPlay={play}
+                  onDownload={handleDownloadFavorite}
+                  downloading={downloadingFav}
+                  favorited={true}
+                  onToggleFavorite={(r) => handleToggleFavorite(r, result.savedFilters)}
+                  onNotes={() => router.push(`/notes/${result.id}`)}
+                  onSearchWithFilters={() => {
+                    const sf = result.savedFilters;
+                    setDateFilter(sf.dateFilter);
+                    setFreeFilter(sf.freeFilter);
+                    setArtistFilter(sf.artistFilter);
+                    setTypeBeat(sf.typeBeat);
+                    setSearchQuery("");
+                    setResults([]);
+                    setTab("search");
+                  }}
+                />
+              ))}
+            </div>
+          )
         )}
 
         {error && (
