@@ -4,6 +4,22 @@ A music production tool built around YouTube. Search for beats, preview them, do
 
 ---
 
+## Preview
+
+### Search, save, and write in one workflow
+
+![Music Craftbook search results](./images/search-results.png)
+
+### Favorites and quick recall
+
+![Music Craftbook favorites](./images/favorites.png)
+
+### Notes editor with synced voice recordings
+
+![Music Craftbook notes editor with timecodes](./images/timecodes-editor.png)
+
+---
+
 ## Features
 
 ### Search & Download
@@ -16,11 +32,27 @@ A music production tool built around YouTube. Search for beats, preview them, do
 - **Inline preview** — stream a preview directly in the browser before downloading
 - **Beat metadata extraction** — automatically pulls BPM, musical key, beat type (trap, drill, lo-fi, phonk…), artist references, and hashtags from the video title, description, and comments
 
+#### Screens
+
+**Sign in**
+
+![Music Craftbook sign in](./images/auth-screen.png)
+
+**Paste a URL and download**
+
+![Music Craftbook paste URL flow](./images/paste-url-download.png)
+
+**Search results with filters**
+
+![Music Craftbook search and filter results](./images/search-results.png)
+
 ### Favorites
 
 - Star any video to save it to your favorites
 - Favorites store the search filters used to find them, so you can jump back to the same search with one click
 - View all saved favorites in a dedicated tab
+
+![Music Craftbook favorites tab](./images/favorites.png)
 
 ### Lyrics & Notes Editor
 
@@ -30,6 +62,8 @@ Each favorited video has a dedicated notes page (`/notes/[videoId]`) with a full
 - **Auto-save** — changes are saved automatically with a 1.2s debounce
 - **Section insertion** — add new text blocks anywhere in the editor
 - **Delete blocks** — backspace on an empty text block removes it; voice notes have a hover-to-delete button
+
+![Music Craftbook empty notes editor](./images/notes-editor-empty.png)
 
 #### Beat Player
 
@@ -66,6 +100,14 @@ Record a voice note at a specific moment in the beat:
   - **▶** — listen to the voice note alone
   - **▶ + beat** — play the voice note and beat together in sync from the saved position
 
+**Beat-synced recording picker**
+
+![Music Craftbook synced recording picker](./images/voice-record-picker.png)
+
+**Saved synced voice note**
+
+![Music Craftbook saved synced voice note](./images/voice-note-synced.png)
+
 #### Timecodes
 
 Songs often have timestamps in their YouTube descriptions (`0:00 Intro`, `1:23 Verse 1`…). The notes page surfaces these as a visual timeline below the beat player:
@@ -75,6 +117,8 @@ Songs often have timestamps in their YouTube descriptions (`0:00 Intro`, `1:23 V
 - **Interactive timeline** — a seekable bar with a live playhead shows where you are in the song. Labels highlight the active section as the beat plays. Click anywhere on the bar to seek.
 - **Auto-tag on recording** — when you record a voice note while the beat is playing, the active section label (e.g. "Verse 1") is automatically attached to the voice note as a badge. Beat-synced recordings use the chosen beat position to find the section.
 
+![Music Craftbook timecodes and note blocks](./images/timecodes-editor.png)
+
 #### Audio Device Selection
 
 A mic icon in the notes header opens a device settings panel:
@@ -82,6 +126,12 @@ A mic icon in the notes header opens a device settings panel:
 - **Mic** — choose which input device to use for recording
 - **Output** — route all audio (beat player + voice notes) to a specific speaker or headphone output
 - Device labels load automatically after microphone permission is granted
+
+### Sharing
+
+Share polished note pages with a clean public view.
+
+![Music Craftbook shared note page](./images/shared-note.png)
 
 ---
 
