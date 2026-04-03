@@ -703,7 +703,7 @@ function DownloaderForm() {
       <div className="w-full max-w-2xl space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">YouTube Downloader</h1>
+          <h1 className="text-3xl font-bold">Music Craftbook</h1>
           {!authLoading && user && (
             <button onClick={handleLogout} className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors">
               Sign out

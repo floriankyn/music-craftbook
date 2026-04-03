@@ -1,4 +1,4 @@
-# YouTube Beat Downloader
+# Music Craftbook
 
 A music production tool built around YouTube. Search for beats, preview them, download them, save favorites, and write lyrics with synced voice notes — all in one place.
 

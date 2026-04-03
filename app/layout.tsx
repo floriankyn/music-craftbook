@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "YouTube Downloader",
-  description: "Download YouTube videos in MP3, MP4, or WAV format",
+  title: "Music Craftbook",
+  description: "Search, preview, download beats and write lyrics with synced voice notes.",
 };
 
 export default function RootLayout({
