@@ -5,7 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
 
 type Format = "mp3" | "mp4" | "wav";
-type Tab = "download" | "search";
+type Tab = "download" | "search" | "favorites";
+type AuthMode = "login" | "signup";
 
 interface BeatAnalysis {
   title: string;
@@ -24,6 +25,13 @@ interface SearchResult extends BeatAnalysis {
   thumbnail: string;
 }
 
+// ─── Helpers ─────────────────────────────────────────────────
+
+function extractVideoId(url: string): string | null {
+  const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : null;
+}
+
 // ─── Audio Preview Hook ───────────────────────────────────────
 
 function usePreviewPlayer() {
@@ -33,12 +41,10 @@ function usePreviewPlayer() {
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const stop = useCallback(() => {
-    // Abort any in-flight fetch
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
     }
-    // Stop any playing audio
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
@@ -142,9 +148,169 @@ function BeatBadges({ analysis }: { analysis: BeatAnalysis }) {
       </div>
       {analysis.inspiredBy.length > 0 && (
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Inspired by <span className="font-medium text-zinc-700 dark:text-zinc-300">{analysis.inspiredBy.join(", ")}</span>
+          Inspired by{" "}
+          <span className="font-medium text-zinc-700 dark:text-zinc-300">
+            {analysis.inspiredBy.join(", ")}
+          </span>
         </p>
       )}
+    </div>
+  );
+}
+
+// ─── Star Button ──────────────────────────────────────────────
+
+function StarButton({
+  favorited,
+  onToggle,
+}: {
+  favorited: boolean;
+  onToggle: () => void;
+}) {
+  const [burst, setBurst] = useState(false);
+
+  function handleClick() {
+    if (!favorited) {
+      setBurst(true);
+      setTimeout(() => setBurst(false), 300);
+    }
+    onToggle();
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      title={favorited ? "Remove from favorites" : "Add to favorites"}
+      className="flex-shrink-0 focus:outline-none"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className={`transition-all duration-200 ${
+          burst ? "scale-150" : favorited ? "scale-125" : "scale-100"
+        } ${favorited ? "text-yellow-400" : "text-zinc-300 dark:text-zinc-600"}`}
+        style={{ width: 20, height: 20 }}
+        fill={favorited ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth={favorited ? 0 : 1.8}
+      >
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      </svg>
+    </button>
+  );
+}
+
+// ─── Auth Form ────────────────────────────────────────────────
+
+function AuthForm({ onSuccess }: { onSuccess: (user: { id: string }) => void }) {
+  const [mode, setMode] = useState<AuthMode>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    try {
+      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/signup";
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Something went wrong");
+      }
+
+      const meRes = await fetch("/api/auth/me");
+      const meData = await meRes.json();
+      if (meData.user) {
+        onSuccess(meData.user);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-6 space-y-5 dark:border-zinc-700 dark:bg-zinc-800/50">
+      <div>
+        <h2 className="text-lg font-semibold">
+          {mode === "login" ? "Sign in to search" : "Create an account"}
+        </h2>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+          {mode === "login"
+            ? "You need an account to access YouTube search."
+            : "Sign up for free to unlock YouTube search."}
+        </p>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-600 dark:bg-zinc-900"
+        />
+        <input
+          type="password"
+          placeholder={mode === "signup" ? "Password (min. 8 characters)" : "Password"}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-600 dark:bg-zinc-900"
+        />
+
+        {error && (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950 dark:text-red-400">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+        >
+          {loading
+            ? "Please wait..."
+            : mode === "login"
+            ? "Sign in"
+            : "Create account"}
+        </button>
+      </form>
+
+      <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+        {mode === "login" ? (
+          <>
+            No account?{" "}
+            <button
+              onClick={() => { setMode("signup"); setError(""); }}
+              className="font-medium text-red-600 hover:underline"
+            >
+              Sign up
+            </button>
+          </>
+        ) : (
+          <>
+            Already have an account?{" "}
+            <button
+              onClick={() => { setMode("login"); setError(""); }}
+              className="font-medium text-red-600 hover:underline"
+            >
+              Sign in
+            </button>
+          </>
+        )}
+      </p>
     </div>
   );
 }
@@ -158,13 +324,17 @@ function ResultCard({
   onPlay,
   onDownload,
   downloading,
+  favorited,
+  onToggleFavorite,
 }: {
   result: SearchResult;
   playingId: string | null;
   loadingId: string | null;
   onPlay: (id: string, url: string) => void;
-  onDownload: (url: string) => void;
+  onDownload: (id: string) => void;
   downloading: string | null;
+  favorited: boolean;
+  onToggleFavorite: (result: SearchResult) => void;
 }) {
   const isPlaying = playingId === result.id;
   const isLoading = loadingId === result.id;
@@ -172,20 +342,14 @@ function ResultCard({
 
   return (
     <div className="flex gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
-      {/* Thumbnail + Play overlay */}
       <button
         onClick={() => onPlay(result.id, result.url)}
         className="relative flex-shrink-0 h-24 w-36 overflow-hidden rounded-md bg-zinc-200 dark:bg-zinc-700"
       >
-        <img
-          src={result.thumbnail}
-          alt=""
-          className="h-full w-full object-cover"
-        />
-        {/* Play / Pause / Loading overlay */}
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40 transition-opacity hover:bg-black/50">
+        <img src={result.thumbnail} alt="" className="h-full w-full object-cover" />
+        <div className="absolute inset-0 flex items-center justify-center bg-black/40 hover:bg-black/55 transition-colors">
           {isLoading ? (
-            <span className="h-8 w-8 animate-spin rounded-full border-3 border-white/40 border-t-white" />
+            <span className="h-8 w-8 animate-spin rounded-full border-2 border-white/40 border-t-white" />
           ) : isPlaying ? (
             <svg className="h-8 w-8 text-white" fill="currentColor" viewBox="0 0 24 24">
               <rect x="6" y="4" width="4" height="16" />
@@ -197,18 +361,22 @@ function ResultCard({
             </svg>
           )}
         </div>
-        {/* Duration badge */}
         <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
           {result.duration}
         </span>
       </button>
 
-      {/* Info */}
       <div className="flex flex-1 flex-col justify-between min-w-0">
         <div className="space-y-1.5">
-          <p className="text-sm font-semibold leading-tight line-clamp-2" title={result.title}>
-            {result.title}
-          </p>
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm font-semibold leading-tight line-clamp-2" title={result.title}>
+              {result.title}
+            </p>
+            <StarButton
+              favorited={favorited}
+              onToggle={() => onToggleFavorite(result)}
+            />
+          </div>
           <BeatBadges analysis={result} />
           {result.tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
@@ -226,7 +394,7 @@ function ResultCard({
         <button
           onClick={() => onDownload(result.id)}
           disabled={isDownloading}
-          className="mt-2 self-start rounded-md bg-red-600 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+          className="mt-2 self-start rounded-md bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
         >
           {isDownloading ? "Downloading..." : "Download"}
         </button>
@@ -242,7 +410,11 @@ function DownloaderForm() {
   const router = useRouter();
 
   const [tab, setTab] = useState<Tab>(
-    searchParams.get("tab") === "search" ? "search" : "download"
+    searchParams.get("tab") === "search"
+      ? "search"
+      : searchParams.get("tab") === "favorites"
+      ? "favorites"
+      : "download"
   );
   const [url, setUrl] = useState("");
   const [format, setFormat] = useState<Format>(
@@ -250,6 +422,10 @@ function DownloaderForm() {
   );
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
+
+  // Auth state
+  const [user, setUser] = useState<{ id: string } | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   // Single URL analysis
   const [analysis, setAnalysis] = useState<BeatAnalysis | null>(null);
@@ -262,8 +438,54 @@ function DownloaderForm() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [downloadingResult, setDownloadingResult] = useState<string | null>(null);
 
-  // Preview player
+  // Favorites
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [favorites, setFavorites] = useState<SearchResult[]>([]);
+  const [downloadingFav, setDownloadingFav] = useState<string | null>(null);
+
   const { playingId, loadingId, play, stop } = usePreviewPlayer();
+
+  // Check auth on mount
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((r) => r.json())
+      .then((data) => setUser(data.user ?? null))
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  // Load favorites when user is known
+  useEffect(() => {
+    if (!user) {
+      setFavoriteIds(new Set());
+      setFavorites([]);
+      return;
+    }
+    fetch("/api/favorites")
+      .then((r) => r.json())
+      .then((data) => {
+        const favs: SearchResult[] = (data.favorites ?? []).map((f: {
+          videoId: string; title: string; thumbnail: string;
+          duration: string; durationSec: number; url: string;
+          bpm: string | null; key: string | null; beatType: string | null;
+          inspiredBy: string[]; tags: string[];
+        }) => ({
+          id: f.videoId,
+          title: f.title,
+          thumbnail: f.thumbnail,
+          duration: f.duration,
+          durationSec: f.durationSec,
+          url: f.url,
+          bpm: f.bpm,
+          key: f.key,
+          beatType: f.beatType,
+          inspiredBy: f.inspiredBy,
+          tags: f.tags,
+        }));
+        setFavorites(favs);
+        setFavoriteIds(new Set(favs.map((f) => f.id)));
+      })
+      .catch(() => {});
+  }, [user]);
 
   // Sync tab + format to URL
   useEffect(() => {
@@ -273,7 +495,7 @@ function DownloaderForm() {
     router.replace(`?${params.toString()}`, { scroll: false });
   }, [tab, format, router]);
 
-  // Auto-analyze when a valid YouTube URL is detected
+  // Auto-analyze pasted URL
   useEffect(() => {
     if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
     setAnalysis(null);
@@ -397,6 +619,92 @@ function DownloaderForm() {
     }
   }
 
+  async function handleDownloadFavorite(id: string) {
+    const result = favorites.find((r) => r.id === id);
+    if (!result) return;
+    setDownloadingFav(id);
+    try {
+      const params = new URLSearchParams({ url: result.url, format });
+      const res = await fetch(`/api/download?${params.toString()}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Download failed");
+      }
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="(.+)"/);
+      const filename = match ? match[1] : `${result.title}.${format}`;
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setDownloadingFav(null);
+    }
+  }
+
+  async function handleToggleFavorite(result: SearchResult) {
+    if (!user) return;
+    const isFav = favoriteIds.has(result.id);
+
+    // Optimistic update
+    if (isFav) {
+      setFavoriteIds((prev) => { const s = new Set(prev); s.delete(result.id); return s; });
+      setFavorites((prev) => prev.filter((f) => f.id !== result.id));
+    } else {
+      setFavoriteIds((prev) => new Set(prev).add(result.id));
+      setFavorites((prev) => [result, ...prev]);
+    }
+
+    try {
+      if (isFav) {
+        await fetch(`/api/favorites?videoId=${result.id}`, { method: "DELETE" });
+      } else {
+        await fetch("/api/favorites", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            videoId: result.id,
+            title: result.title,
+            thumbnail: result.thumbnail,
+            duration: result.duration,
+            durationSec: result.durationSec,
+            url: result.url,
+            bpm: result.bpm,
+            key: result.key,
+            beatType: result.beatType,
+            inspiredBy: result.inspiredBy,
+            tags: result.tags,
+          }),
+        });
+      }
+    } catch {
+      // Rollback on error
+      if (isFav) {
+        setFavoriteIds((prev) => new Set(prev).add(result.id));
+        setFavorites((prev) => [result, ...prev]);
+      } else {
+        setFavoriteIds((prev) => { const s = new Set(prev); s.delete(result.id); return s; });
+        setFavorites((prev) => prev.filter((f) => f.id !== result.id));
+      }
+    }
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setUser(null);
+    setResults([]);
+    setFavorites([]);
+    setFavoriteIds(new Set());
+    stop();
+    if (tab === "favorites") setTab("download");
+  }
+
   const formats: { value: Format; label: string }[] = [
     { value: "mp4", label: "MP4" },
     { value: "mp3", label: "MP3" },
@@ -406,12 +714,23 @@ function DownloaderForm() {
   return (
     <div className="flex flex-col items-center flex-1 px-4 py-8">
       <div className="w-full max-w-2xl space-y-6">
-        <h1 className="text-3xl font-bold text-center">YouTube Downloader</h1>
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold">YouTube Downloader</h1>
+          {!authLoading && user && (
+            <button
+              onClick={handleLogout}
+              className="text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+            >
+              Sign out
+            </button>
+          )}
+        </div>
 
         {/* Tab switcher */}
         <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-700 overflow-hidden">
           <button
-            onClick={() => setTab("download")}
+            onClick={() => { setTab("download"); setError(""); }}
             className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
               tab === "download"
                 ? "bg-red-500 text-white"
@@ -421,7 +740,7 @@ function DownloaderForm() {
             Paste URL
           </button>
           <button
-            onClick={() => setTab("search")}
+            onClick={() => { setTab("search"); setError(""); }}
             className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
               tab === "search"
                 ? "bg-red-500 text-white"
@@ -430,6 +749,32 @@ function DownloaderForm() {
           >
             Search YouTube
           </button>
+          {user && (
+            <button
+              onClick={() => { setTab("favorites"); setError(""); }}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                tab === "favorites"
+                  ? "bg-red-500 text-white"
+                  : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              }`}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className={`w-3.5 h-3.5 ${tab === "favorites" ? "text-yellow-300" : "text-yellow-400"}`}
+                fill="currentColor"
+              >
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              Favorites
+              {favoriteIds.size > 0 && (
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${
+                  tab === "favorites" ? "bg-white/20 text-white" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400"
+                }`}>
+                  {favoriteIds.size}
+                </span>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Format selector (shared) */}
@@ -469,34 +814,54 @@ function DownloaderForm() {
               </div>
             )}
 
-            {analysis && !analyzing && (
-              <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-5 py-4 space-y-3 dark:border-zinc-700 dark:bg-zinc-800/50">
-                <p className="font-semibold text-sm truncate" title={analysis.title}>
-                  {analysis.title}
-                </p>
-                <BeatBadges analysis={analysis} />
-                {analysis.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {analysis.tags.map((tag, i) => (
-                      <span
-                        key={i}
-                        className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {!analysis.bpm &&
-                  !analysis.key &&
-                  !analysis.beatType &&
-                  analysis.inspiredBy.length === 0 && (
-                    <p className="text-xs text-zinc-400">
-                      No beat details found in the video metadata.
+            {analysis && !analyzing && (() => {
+              const videoId = extractVideoId(url.trim());
+              const asResult: SearchResult | null = videoId ? {
+                id: videoId,
+                url: url.trim(),
+                title: analysis.title,
+                thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                duration: "",
+                durationSec: 0,
+                bpm: analysis.bpm,
+                key: analysis.key,
+                beatType: analysis.beatType,
+                inspiredBy: analysis.inspiredBy,
+                tags: analysis.tags,
+              } : null;
+
+              return (
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-5 py-4 space-y-3 dark:border-zinc-700 dark:bg-zinc-800/50">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-semibold text-sm truncate" title={analysis.title}>
+                      {analysis.title}
                     </p>
+                    {user && asResult && (
+                      <StarButton
+                        favorited={favoriteIds.has(asResult.id)}
+                        onToggle={() => handleToggleFavorite(asResult)}
+                      />
+                    )}
+                  </div>
+                  <BeatBadges analysis={analysis} />
+                  {analysis.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {analysis.tags.map((tag, i) => (
+                        <span
+                          key={i}
+                          className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
                   )}
-              </div>
-            )}
+                  {!analysis.bpm && !analysis.key && !analysis.beatType && analysis.inspiredBy.length === 0 && (
+                    <p className="text-xs text-zinc-400">No beat details found in the video metadata.</p>
+                  )}
+                </div>
+              );
+            })()}
 
             <button
               onClick={handleDownload}
@@ -511,56 +876,101 @@ function DownloaderForm() {
         {/* ── Search Tab ── */}
         {tab === "search" && (
           <>
-            <form onSubmit={handleSearch} className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Search beats, instrumentals, songs..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-700 dark:bg-zinc-900"
-              />
-              <button
-                type="submit"
-                disabled={searching}
-                className="rounded-lg bg-red-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-              >
-                {searching ? (
-                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                ) : (
-                  "Search"
-                )}
-              </button>
-            </form>
-
-            {searching && results.length === 0 && (
-              <div className="flex items-center justify-center py-12">
-                <div className="flex items-center gap-3 text-zinc-500 dark:text-zinc-400">
-                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-red-500" />
-                  Searching and analyzing results...
-                </div>
+            {authLoading ? (
+              <div className="flex justify-center py-12">
+                <span className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-red-500" />
               </div>
-            )}
+            ) : !user ? (
+              <AuthForm onSuccess={setUser} />
+            ) : (
+              <>
+                <form onSubmit={handleSearch} className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Search beats, instrumentals, songs..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-700 dark:bg-zinc-900"
+                  />
+                  <button
+                    type="submit"
+                    disabled={searching}
+                    className="rounded-lg bg-red-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {searching ? (
+                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    ) : (
+                      "Search"
+                    )}
+                  </button>
+                </form>
 
-            {results.length > 0 && (
+                {searching && results.length === 0 && (
+                  <div className="flex items-center justify-center py-12">
+                    <div className="flex items-center gap-3 text-zinc-500 dark:text-zinc-400">
+                      <span className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-red-500" />
+                      Searching and analyzing results...
+                    </div>
+                  </div>
+                )}
+
+                {results.length > 0 && (
+                  <div className="space-y-3">
+                    {results.map((result) => (
+                      <ResultCard
+                        key={result.id}
+                        result={result}
+                        playingId={playingId}
+                        loadingId={loadingId}
+                        onPlay={play}
+                        onDownload={handleDownloadResult}
+                        downloading={downloadingResult}
+                        favorited={favoriteIds.has(result.id)}
+                        onToggleFavorite={handleToggleFavorite}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {!searching && results.length === 0 && searchQuery && (
+                  <p className="text-center text-sm text-zinc-400 py-8">
+                    No results. Try a different search.
+                  </p>
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── Favorites Tab ── */}
+        {tab === "favorites" && user && (
+          <>
+            {favorites.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-16 text-zinc-400">
+                <svg viewBox="0 0 24 24" className="w-12 h-12 text-zinc-200 dark:text-zinc-700" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+                <p className="text-sm">No favorites yet.</p>
+                <p className="text-xs text-zinc-400">
+                  Search for videos and tap the star to save them here.
+                </p>
+              </div>
+            ) : (
               <div className="space-y-3">
-                {results.map((result) => (
+                {favorites.map((result) => (
                   <ResultCard
                     key={result.id}
                     result={result}
                     playingId={playingId}
                     loadingId={loadingId}
                     onPlay={play}
-                    onDownload={handleDownloadResult}
-                    downloading={downloadingResult}
+                    onDownload={handleDownloadFavorite}
+                    downloading={downloadingFav}
+                    favorited={true}
+                    onToggleFavorite={handleToggleFavorite}
                   />
                 ))}
               </div>
-            )}
-
-            {!searching && results.length === 0 && searchQuery && (
-              <p className="text-center text-sm text-zinc-400 py-8">
-                No results. Try a different search.
-              </p>
             )}
           </>
         )}

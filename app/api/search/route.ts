@@ -4,10 +4,16 @@ import {
   getYtDlpPath,
   analyzeBeatInfo,
 } from "@/app/lib/ytdlp";
+import { getSession } from "@/app/lib/session";
 
 export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
+  const session = await getSession();
+  if (!session?.userId) {
+    return Response.json({ error: "Authentication required" }, { status: 401 });
+  }
+
   const query = request.nextUrl.searchParams.get("q");
 
   if (!query || !query.trim()) {

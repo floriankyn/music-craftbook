@@ -1,6 +1,32 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ytdl
+      POSTGRES_PASSWORD: ytdl_secret
+      POSTGRES_DB: ytdl
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ytdl"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build: .
     ports:
       - "3000:3000"
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://ytdl:ytdl_secret@postgres:5432/ytdl
+      SESSION_SECRET: ${SESSION_SECRET}
+
+volumes:
+  pgdata:

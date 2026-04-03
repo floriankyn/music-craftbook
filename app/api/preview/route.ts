@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { spawn } from "node:child_process";
 import { getYtDlpPath, getFfmpegPath, isValidYouTubeUrl } from "@/app/lib/ytdlp";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   const url = request.nextUrl.searchParams.get("url");
@@ -52,7 +52,6 @@ export async function GET(request: NextRequest) {
 
       const ffProc = spawn(ffmpeg, [
         "-i", "pipe:0",
-        "-t", "30",
         "-f", "mp3",
         "-ab", "128k",
         "-ac", "2",
