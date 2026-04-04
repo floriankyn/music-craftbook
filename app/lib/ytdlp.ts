@@ -6,9 +6,10 @@ import { join } from "node:path";
 export const execFileAsync = promisify(execFile);
 
 export function getYtDlpPath(): string {
-  const bundled = join(process.cwd(), "bin", "yt-dlp_linux");
-  if (process.platform === "linux" && existsSync(bundled)) {
-    return bundled;
+  if (process.platform === "linux") {
+    const arch = process.arch === "arm64" ? "yt-dlp_linux_aarch64" : "yt-dlp_linux";
+    const bundled = join(process.cwd(), "bin", arch);
+    if (existsSync(bundled)) return bundled;
   }
   return "yt-dlp";
 }

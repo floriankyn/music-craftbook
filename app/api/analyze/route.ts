@@ -58,7 +58,8 @@ export async function GET(request: NextRequest) {
       } catch {
         comments = commentsRaw.trim().slice(0, 3000);
       }
-    } catch {
+    } catch (error) {
+        console.log(error);
       // Comments might be disabled or unavailable
     }
 
@@ -66,7 +67,8 @@ export async function GET(request: NextRequest) {
     const timecodes = parseTimecodes(description);
 
     return Response.json({ ...analysis, timecodes });
-  } catch {
+  } catch (error) {
+      console.log(error);
     return Response.json(
       { error: "Failed to analyze video" },
       { status: 500 }
