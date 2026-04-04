@@ -22,7 +22,7 @@ A music production web app. Users search YouTube for beats, preview and download
 | Language | TypeScript |
 | Styling | Tailwind CSS 4 |
 | ORM | Prisma 5 + PostgreSQL |
-| Auth | JWT via `jose`, `bcryptjs`, `httpOnly` cookies |
+| Auth | JWT via `jose`, `bcryptjs`, `httpOnly` cookies, Google OAuth 2.0 |
 | YouTube | `yt-dlp` binary (`bin/yt-dlp_linux` in container) |
 | Audio conversion | `ffmpeg-static` |
 | Runtime | Node.js 22, Docker Compose |
@@ -46,6 +46,8 @@ app/
   globals.css
   api/
     auth/               # login, logout, signup, me
+      google/route.ts       # Google OAuth — redirects to Google consent screen
+      google/callback/route.ts  # Google OAuth callback — exchanges code, creates session
     search/route.ts     # YouTube search via yt-dlp (requires auth)
     analyze/route.ts    # Single-video metadata extraction
     download/route.ts   # Stream download (MP4 / MP3 / WAV)
@@ -54,19 +56,24 @@ app/
     notes/[videoId]/route.ts  # GET + PUT note blocks (includes song metadata)
     songs/route.ts      # GET notes with songName set (no proxy — uses getSession)
     view/[publicId]/route.ts  # Public note view (no auth)
+    user/route.ts             # DELETE — delete account (GDPR Art. 17, cascade)
+    user/email/route.ts       # PATCH — change email
+    user/password/route.ts    # PATCH — change or set password
+    user/export/route.ts      # GET — export all user data as JSON (GDPR Art. 20)
   notes/[videoId]/page.tsx    # Full lyrics/notes editor
   view/[publicId]/page.tsx    # Read-only public share page
-proxy.ts                # Auth middleware — protects /api/search, /api/favorites, /api/notes
+  settings/page.tsx           # Account settings (email, password, export, delete)
+proxy.ts                # Auth middleware — protects /api/search, /api/favorites, /api/notes, /api/user
 prisma/
   schema.prisma         # User, Favorite, Note models
-  migrations/           # 5 migrations (init → favorites → filters → notes → note_song_metadata)
+  migrations/           # 7 migrations (init → … → note_song_metadata → google_auth)
 ```
 
 ---
 
 ## Data models
 
-**User** — `id`, `email`, `passwordHash`, `createdAt`
+**User** — `id`, `email`, `passwordHash?` (null for Google-only accounts), `googleId?` (unique), `createdAt`
 
 **Favorite** — `userId`, `videoId`, `title`, `thumbnail`, `duration`, `durationSec`, `url`, `bpm?`, `key?`, `beatType?`, `inspiredBy[]`, `tags[]`, `dateFilter?`, `freeFilter`, `artistFilter?`, `typeBeat` — plus unique `[userId, videoId]`
 
@@ -94,13 +101,18 @@ interface Timecode { id: string; time: number; label: string; }
 ## Auth
 
 - `POST /api/auth/signup` — creates user, sets session cookie
-- `POST /api/auth/login` — verifies password, sets session cookie
+- `POST /api/auth/login` — verifies password (rejects if `passwordHash` is null — Google-only account)
 - `POST /api/auth/logout` — clears cookie
-- `GET /api/auth/me` — returns `{ user }` or 401
+- `GET /api/auth/me` — returns `{ user: { id, email, createdAt, hasPassword } }` or `{ user: null }`
+- `GET /api/auth/google` — redirects to Google consent screen (state cookie for CSRF)
+- `GET /api/auth/google/callback` — exchanges code for token, fetches Google user info, finds/creates/links user, creates session
 - Session: encrypted JWT in `httpOnly` cookie, 7-day expiry
 - `app/lib/jwt.ts` — `encrypt` / `decrypt`
-- `app/lib/session.ts` — `getSession()` (server-side helper)
+- `app/lib/session.ts` — `getSession()`, `createSession()`, `deleteSession()` (server-side helpers)
 - `app/lib/prisma.ts` — singleton Prisma client
+
+### Google OAuth account linking
+When a user signs in with Google and their Google email matches an existing email/password account, `googleId` is written to that existing row — accounts are merged automatically. Subsequent Google sign-ins find the user by `googleId` directly.
 
 ---
 
@@ -155,6 +167,11 @@ Uses `block.duration` as fallback denominator when `audio.duration` is not yet l
 | Variable | Description |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET` | Secret for session token signing |
+| `SESSION_SECRET` | Secret for session JWT signing |
+| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 client secret |
+| `APP_URL` | Public base URL — used as OAuth redirect base (e.g. `http://localhost:3000`) |
 
-Pass via `.env.local` when running locally, or Docker Compose env file.
+- `.env.local` — read by Next.js dev server
+- `.env` — read by Prisma CLI (`prisma migrate deploy` etc.)
+- Both files are git-ignored via `.gitignore` (`env*` rule)

@@ -154,6 +154,23 @@ Capture ideas exactly where they belong in the beat.
 
 ---
 
+### 🔐 Authentication
+
+- Email + password sign-up / sign-in
+- **Google OAuth** — one-click sign-in, auto-links to existing email account
+- Session stored in a secure `httpOnly` cookie (7-day JWT)
+
+---
+
+### ⚙️ Account Settings
+
+- Change email address
+- Change or set a password
+- **Export all your data** as JSON (GDPR Art. 20)
+- **Delete your account** — permanently erases all favorites, notes, and recordings (GDPR Art. 17)
+
+---
+
 ### 🔗 Sharing (🚀 Standout Feature)
 
 Turn notes into a **shareable experience**:
@@ -176,7 +193,7 @@ Turn notes into a **shareable experience**:
 | Language | TypeScript |
 | Styling | Tailwind CSS |
 | Database | PostgreSQL + Prisma |
-| Auth | JWT (jose) + bcrypt |
+| Auth | JWT (jose) + bcrypt + Google OAuth 2.0 |
 | YouTube | yt-dlp |
 | Audio | ffmpeg |
 | Infra | Docker Compose |
@@ -207,7 +224,7 @@ http://localhost:3000
 
 ```bash
 npm install
-cp .env.example .env
+# create .env.local with the variables listed below
 npx prisma migrate deploy
 npm run dev
 ```
@@ -218,8 +235,13 @@ npm run dev
 
 | Variable | Description |
 |----------|------------|
-| DATABASE_URL | PostgreSQL connection |
-| JWT_SECRET | Auth secret |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SESSION_SECRET` | Secret used to sign session JWTs |
+| `GOOGLE_CLIENT_ID` | Google OAuth app client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth app client secret |
+| `APP_URL` | Public base URL (e.g. `http://localhost:3000`) |
+
+> Set these in `.env.local` for the Next.js dev server and in `.env` for Prisma CLI commands.
 
 ---
 
