@@ -185,6 +185,18 @@ Turn notes into a **shareable experience**:
 
 ---
 
+### 👥 Real-time Collaboration
+
+Work on lyrics together, live:
+
+- Generate a collaboration invite link from any note
+- Collaborators join without needing to own the note
+- Block and timecode changes sync instantly to all participants
+- Peer presence — see who's in the session
+- Changes are auto-saved with a short debounce
+
+---
+
 ## 🧱 Tech Stack
 
 | Layer | Technology |
@@ -194,6 +206,7 @@ Turn notes into a **shareable experience**:
 | Styling | Tailwind CSS |
 | Database | PostgreSQL + Prisma |
 | Auth | JWT (jose) + bcrypt + Google OAuth 2.0 |
+| Real-time | Socket.io (custom Node.js server) |
 | YouTube | yt-dlp |
 | Audio | ffmpeg |
 | Infra | Docker Compose |

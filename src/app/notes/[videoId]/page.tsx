@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { io, type Socket } from "socket.io-client";
 
 // ─── Constants ───────────────────────────────────────────────
 
@@ -1033,6 +1034,9 @@ function BeatBadges({ fav }: { fav: Favorite }) {
 export default function NotesPage() {
   const { videoId } = useParams<{ videoId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const collabToken = searchParams.get("collab"); // present when opened as collaborator
+  const isCollaborator = !!collabToken;
 
   const [favorite, setFavorite] = useState<Favorite | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([{ id: nanoid(), type: "text", content: "" }]);
@@ -1054,6 +1058,15 @@ export default function NotesPage() {
   const [videoThumbnail, setVideoThumbnail] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
+
+  // ── Collaboration ─────────────────────────────────────────
+  const [editToken, setEditToken] = useState<string | null>(null);
+  const [peers, setPeers] = useState<{ id: string; email: string }[]>([]);
+  const [showCollabPanel, setShowCollabPanel] = useState(false);
+  const [collabLinkCopied, setCollabLinkCopied] = useState(false);
+  const [generatingToken, setGeneratingToken] = useState(false);
+  const socketRef = useRef<Socket | null>(null);
+  const activeToken = editToken ?? collabToken;
 
   // ── Audio devices ─────────────────────────────────────────
   const [reanalyzing, setReanalyzing] = useState(false);
@@ -1117,7 +1130,11 @@ export default function NotesPage() {
   // ── Load ──────────────────────────────────────────────────
 
   useEffect(() => {
-    fetch(`/api/notes/${videoId}`)
+    const fetchUrl = isCollaborator
+      ? `/api/collab/${collabToken}`
+      : `/api/notes/${videoId}`;
+
+    fetch(fetchUrl)
       .then((r) => {
         if (r.status === 401 || r.status === 404) { router.replace("/?tab=favorites"); return null; }
         return r.json();
@@ -1127,6 +1144,8 @@ export default function NotesPage() {
         setFavorite(data.favorite);
         if (data.note?.blocks?.length) setBlocks(data.note.blocks as Block[]);
         if (data.note?.timecodes?.length) setTimecodes(data.note.timecodes as Timecode[]);
+        // In collaborator mode, set the editToken so Socket.io connects
+        if (isCollaborator && collabToken) setEditToken(collabToken);
 
         // Song / beat metadata — note values take priority, fall back to favorite
         const note = data.note;
@@ -1155,6 +1174,8 @@ export default function NotesPage() {
   // ── Save ──────────────────────────────────────────────────
 
   const save = useCallback(async () => {
+    // Collaborators don't own the note — the Socket.io server handles persistence
+    if (isCollaborator) { setSaveStatus("saved"); return; }
     setSaveStatus("saving");
     try {
       await fetch(`/api/notes/${videoId}`, {
@@ -1186,9 +1207,88 @@ export default function NotesPage() {
     saveTimerRef.current = setTimeout(() => save(), 1200);
   }
 
+  // ── Socket.io ─────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!activeToken) return;
+
+    const socket = io({ path: "/socket.io", transports: ["websocket", "polling"] });
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      socket.emit("join-room", activeToken);
+    });
+
+    socket.on("room-state", ({ blocks: remoteBlocks, timecodes: remoteTcs, peers: remotePeers }: {
+      blocks: Block[]; timecodes: Timecode[]; peers: { id: string; email: string }[];
+    }) => {
+      // Only apply remote state if it's non-empty (don't overwrite local content with empty)
+      if (remoteBlocks?.length) {
+        setBlocks(remoteBlocks);
+        blocksRef.current = remoteBlocks;
+      }
+      if (remoteTcs?.length) {
+        setTimecodes(remoteTcs);
+        timecodesRef.current = remoteTcs;
+      }
+      setPeers(remotePeers ?? []);
+    });
+
+    socket.on("blocks-update", ({ blocks: remoteBlocks }: { blocks: Block[]; fromPeerId: string }) => {
+      setBlocks(remoteBlocks);
+      blocksRef.current = remoteBlocks;
+      // Owner: schedule a REST save so remote edits are also persisted client-side
+      if (!isCollaborator) scheduleSave();
+    });
+
+    socket.on("timecodes-update", ({ timecodes: remoteTcs }: { timecodes: Timecode[]; fromPeerId: string }) => {
+      setTimecodes(remoteTcs);
+      timecodesRef.current = remoteTcs;
+    });
+
+    socket.on("peer-joined", (peer: { id: string; email: string }) => {
+      setPeers((prev) => [...prev.filter((p) => p.id !== peer.id), peer]);
+    });
+
+    socket.on("peer-left", ({ id }: { id: string }) => {
+      setPeers((prev) => prev.filter((p) => p.id !== id));
+    });
+
+    return () => { socket.disconnect(); socketRef.current = null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeToken]);
+
+  function emitBlocks(updated: Block[]) {
+    socketRef.current?.emit("blocks-update", updated);
+  }
+
+  function emitTimecodes(updated: Timecode[]) {
+    socketRef.current?.emit("timecodes-update", updated);
+  }
+
+  async function generateCollabLink() {
+    setGeneratingToken(true);
+    try {
+      const res = await fetch(`/api/notes/${videoId}/collab`, { method: "POST" });
+      const data = await res.json();
+      if (data.editToken) setEditToken(data.editToken);
+    } finally {
+      setGeneratingToken(false);
+    }
+  }
+
+  async function revokeCollabLink() {
+    await fetch(`/api/notes/${videoId}/collab`, { method: "DELETE" });
+    setEditToken(null);
+    setPeers([]);
+    socketRef.current?.disconnect();
+    socketRef.current = null;
+  }
+
   function updateTimecodes(updated: Timecode[]) {
     setTimecodes(updated);
     timecodesRef.current = updated;
+    emitTimecodes(updated);
     scheduleSave();
   }
 
@@ -1275,6 +1375,8 @@ export default function NotesPage() {
   function updateTextBlock(id: string, content: string) {
     setBlocks((prev) => {
       const updated = prev.map((b) => b.id === id && b.type === "text" ? { ...b, content } : b);
+      blocksRef.current = updated;
+      emitBlocks(updated);
       scheduleSave();
       return updated;
     });
@@ -1286,6 +1388,8 @@ export default function NotesPage() {
       const final = updated.length === 0
         ? [{ id: nanoid(), type: "text" as const, content: "" }]
         : updated;
+      blocksRef.current = final;
+      emitBlocks(final);
       scheduleSave();
       return final;
     });
@@ -1298,6 +1402,8 @@ export default function NotesPage() {
         { id: nanoid(), type: "text" as const, content: "" },
         ...prev.slice(atIndex),
       ];
+      blocksRef.current = updated;
+      emitBlocks(updated);
       scheduleSave();
       return updated;
     });
@@ -1315,6 +1421,8 @@ export default function NotesPage() {
         { id: nanoid(), type: "text" as const, content: "" },
         ...prev.slice(atIndex),
       ];
+      blocksRef.current = updated;
+      emitBlocks(updated);
       scheduleSave();
       return updated;
     });
@@ -1461,6 +1569,45 @@ export default function NotesPage() {
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" />
               </svg>
             </button>
+
+            {/* Collaborate toggle (hidden for collaborators — they can't manage the link) */}
+            {!isCollaborator && (
+              <button
+                onClick={() => setShowCollabPanel((v) => !v)}
+                title="Collaborate in real-time"
+                className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-full transition-colors ${
+                  showCollabPanel || activeToken
+                    ? "bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400"
+                    : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+              </button>
+            )}
+
+            {/* Peer presence avatars */}
+            {peers.length > 0 && (
+              <div className="flex-shrink-0 flex items-center -space-x-1.5">
+                {peers.slice(0, 4).map((peer) => (
+                  <div
+                    key={peer.id}
+                    title={peer.email}
+                    className="w-6 h-6 rounded-full bg-blue-500 border-2 border-white dark:border-zinc-950 flex items-center justify-center text-[9px] font-bold text-white uppercase select-none"
+                  >
+                    {peer.email[0]}
+                  </div>
+                ))}
+                {peers.length > 4 && (
+                  <div className="w-6 h-6 rounded-full bg-zinc-300 dark:bg-zinc-700 border-2 border-white dark:border-zinc-950 flex items-center justify-center text-[9px] font-bold text-zinc-600 dark:text-zinc-300">
+                    +{peers.length - 4}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Row 2 (conditional): device selectors */}
@@ -1496,6 +1643,73 @@ export default function NotesPage() {
                   ))}
                 </select>
               </div>
+            </div>
+          )}
+
+          {/* Row 3 (conditional): collaboration panel */}
+          {showCollabPanel && !isCollaborator && (
+            <div className="flex flex-col gap-2 rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-900/50 dark:bg-blue-950/30 px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-blue-700 dark:text-blue-400">Real-time collaboration</span>
+                {activeToken && (
+                  <button onClick={revokeCollabLink} className="text-[10px] text-red-500 hover:underline">Revoke link</button>
+                )}
+              </div>
+              {!activeToken ? (
+                <button
+                  onClick={generateCollabLink}
+                  disabled={generatingToken}
+                  className="self-start rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                >
+                  {generatingToken ? "Generating…" : "Generate invite link"}
+                </button>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 rounded-md bg-white dark:bg-zinc-900 border border-blue-200 dark:border-blue-900/40 px-2.5 py-1.5">
+                    <span className="flex-1 text-[10px] font-mono text-zinc-600 dark:text-zinc-400 truncate">
+                      {typeof window !== "undefined"
+                        ? `${window.location.origin}/notes/${videoId}?collab=${activeToken}`
+                        : `/notes/${videoId}?collab=${activeToken}`}
+                    </span>
+                    <button
+                      onClick={() => {
+                        const link = `${window.location.origin}/notes/${videoId}?collab=${activeToken}`;
+                        navigator.clipboard.writeText(link);
+                        setCollabLinkCopied(true);
+                        setTimeout(() => setCollabLinkCopied(false), 2000);
+                      }}
+                      className="flex-shrink-0 text-[10px] font-medium text-blue-600 hover:underline dark:text-blue-400"
+                    >
+                      {collabLinkCopied ? "Copied!" : "Copy"}
+                    </button>
+                  </div>
+                  {peers.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {peers.map((peer) => (
+                        <span key={peer.id} className="flex items-center gap-1 rounded-full bg-blue-100 dark:bg-blue-900/40 px-2 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
+                          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                          {peer.email}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {peers.length === 0 && (
+                    <p className="text-[10px] text-blue-500 dark:text-blue-400">Share the link above — collaborators will appear here when they join.</p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Collaborator banner */}
+          {isCollaborator && (
+            <div className="flex items-center gap-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 px-3 py-1.5 text-xs text-blue-700 dark:text-blue-400">
+              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              Collaborating in real-time
+              {peers.length > 0 && <span className="ml-1 opacity-70">· {peers.length + 1} people editing</span>}
             </div>
           )}
 

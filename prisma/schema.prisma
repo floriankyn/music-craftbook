@@ -27,6 +27,7 @@ model Note {
   songName       String?
   isPublic       Boolean  @default(false)
   publicId       String?  @unique
+  editToken      String?  @unique
   bpm            String?
   key            String?
   beatType       String?

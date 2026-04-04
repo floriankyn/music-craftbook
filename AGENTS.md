@@ -31,7 +31,8 @@ A music production web app. Users search YouTube for beats, preview and download
 
 ## Critical Next.js v16 conventions
 
-- Middleware file is **`proxy.ts`** at the project root, exporting `async function proxy()` — NOT `middleware.ts` / `middleware()`.
+- Middleware file is **`src/proxy.ts`** (inside `src/`, at the same level as `src/app/`), exporting `async function proxy()` — NOT `middleware.ts` / `middleware()`.
+- **`src/app/` is silently ignored by Next.js if a root-level `app/` directory exists.** Never let a root `app/` accumulate — it will shadow all routes in `src/app/` with no error.
 - Route params are a **Promise** in page components and route handlers: `const { videoId } = await params`.
 - Always read `node_modules/next/dist/docs/` before touching routing or middleware.
 
@@ -54,20 +55,23 @@ src/
       download/route.ts   # Stream download (MP4 / MP3 / WAV)
       preview/route.ts    # Audio preview stream
       favorites/route.ts  # GET / POST / PATCH / DELETE favorites
-      notes/[videoId]/route.ts  # GET + PUT note blocks (includes song metadata)
+      notes/[videoId]/route.ts        # GET + PUT note blocks (includes song metadata)
+      notes/[videoId]/collab/route.ts # POST — generate editToken; DELETE — revoke
       songs/route.ts      # GET notes with songName set (no proxy — uses getSession)
       view/[publicId]/route.ts  # Public note view (no auth)
+      collab/[editToken]/route.ts  # GET — load note+favorite for collaborator join
       user/route.ts             # DELETE — delete account (GDPR Art. 17, cascade)
       user/email/route.ts       # PATCH — change email
       user/password/route.ts    # PATCH — change or set password
       user/export/route.ts      # GET — export all user data as JSON (GDPR Art. 20)
-    notes/[videoId]/page.tsx    # Full lyrics/notes editor
+    notes/[videoId]/page.tsx    # Full lyrics/notes editor (+ real-time collab via Socket.io)
     view/[publicId]/page.tsx    # Read-only public share page
     settings/page.tsx           # Account settings (email, password, export, delete)
-  proxy.ts                # Auth middleware — protects /api/search, /api/favorites, /api/notes, /api/user
+  proxy.ts                # Auth middleware — protects /api/search, /api/favorites, /api/notes, /api/user, /api/collab
+server.ts               # Custom HTTP server: wraps Next.js + mounts Socket.io on the same port
 prisma/
   schema.prisma         # User, Favorite, Note models
-  migrations/           # 7 migrations (init → … → note_song_metadata → google_auth)
+  migrations/           # 8 migrations (init → … → note_timecodes → google_auth → collab_token)
 ```
 
 ---
@@ -78,7 +82,7 @@ prisma/
 
 **Favorite** — `userId`, `videoId`, `title`, `thumbnail`, `duration`, `durationSec`, `url`, `bpm?`, `key?`, `beatType?`, `inspiredBy[]`, `tags[]`, `dateFilter?`, `freeFilter`, `artistFilter?`, `typeBeat` — plus unique `[userId, videoId]`
 
-**Note** — `userId`, `videoId`, `blocks Json`, `timecodes Json`, `songName?`, `isPublic`, `publicId?` (unique share slug), `bpm?`, `key?`, `beatType?`, `videoTitle?`, `videoThumbnail?`, `videoUrl?` — unique `[userId, videoId]`
+**Note** — `userId`, `videoId`, `blocks Json`, `timecodes Json`, `songName?`, `isPublic`, `publicId?` (unique share slug), `editToken?` (unique collab invite token), `bpm?`, `key?`, `beatType?`, `videoTitle?`, `videoThumbnail?`, `videoUrl?` — unique `[userId, videoId]`
 
 ### Note block shapes
 
@@ -108,9 +112,9 @@ interface Timecode { id: string; time: number; label: string; }
 - `GET /api/auth/google` — redirects to Google consent screen (state cookie for CSRF)
 - `GET /api/auth/google/callback` — exchanges code for token, fetches Google user info, finds/creates/links user, creates session
 - Session: encrypted JWT in `httpOnly` cookie, 7-day expiry
-- `app/lib/jwt.ts` — `encrypt` / `decrypt`
-- `app/lib/session.ts` — `getSession()`, `createSession()`, `deleteSession()` (server-side helpers)
-- `app/lib/prisma.ts` — singleton Prisma client
+- `src/app/lib/jwt.ts` — `encrypt` / `decrypt`
+- `src/app/lib/session.ts` — `getSession()`, `createSession()`, `deleteSession()` (server-side helpers)
+- `src/app/lib/prisma.ts` — singleton Prisma client
 
 ### Google OAuth account linking
 When a user signs in with Google and their Google email matches an existing email/password account, `googleId` is written to that existing row — accounts are merged automatically. Subsequent Google sign-ins find the user by `googleId` directly.
@@ -151,6 +155,16 @@ Exposes `BeatPlayerHandle`: `{ getCurrentTime, getDuration, pause, loadAndPlayFr
 ### Voice note progress bar
 Uses `block.duration` as fallback denominator when `audio.duration` is not yet loaded (`isFinite(a.duration) && a.duration > 0 ? a.duration : block.duration`).
 
+### Real-time collaboration
+- Owner generates an `editToken` via `POST /api/notes/[videoId]/collab` — stored on the Note row (`editToken` column, unique).
+- Invite link: `https://<host>/notes/[videoId]?collab=<editToken>`.
+- Collaborators load the note via `GET /api/collab/[editToken]` (no ownership check — token is the credential).
+- Socket.io server runs in `server.ts` alongside Next.js on the same port (`/socket.io` path).
+- Auth: `io.use()` middleware reads the session cookie from the handshake headers and verifies the JWT.
+- Rooms: keyed by `editToken`. In-memory `Map<editToken, RoomState>` holds live blocks/timecodes + a debounced (800 ms) DB save timer.
+- Events: `join-room` → `room-state` + `peer-joined`; `blocks-update` / `timecodes-update` fan out to all peers; `disconnect` → `peer-left`, room cleaned up after 5 s if empty.
+- Collaborators skip the REST save (`PUT /api/notes/[videoId]`) and push changes only via Socket.io.
+
 ---
 
 ## Docker / deployment
@@ -158,10 +172,11 @@ Uses `block.duration` as fallback denominator when `audio.duration` is not yet l
 - `node:22-slim` base image — OpenSSL 3.x
 - Prisma `binaryTargets`: `["native", "linux-arm64-openssl-3.0.x"]` — required for the container runtime
 - **Do NOT copy `package-lock.json` into the Docker deps stage** — it was generated on macOS and locks macOS native binary paths (lightningcss etc.), causing build failures on Linux. The `deps` stage copies only `package.json` and runs `npm install` fresh.
-- Standalone Next.js output (`output: "standalone"` in `next.config.ts`)
-- Container entrypoint: `prisma migrate deploy && node server.js`
+- No `output: "standalone"` — full `node_modules` is copied into the runner stage instead.
+- Container entrypoint: `prisma migrate deploy && npx tsx server.ts`
+- `server.ts` (project root) — custom Node.js server that boots Next.js + Socket.io together. Dev: `tsx watch server.ts`; prod: `npx tsx server.ts`.
 - `ffmpeg` installed via `apt-get` in the runner stage
-- `yt-dlp` binary at `bin/yt-dlp_linux`, copied into the runner stage
+- `yt-dlp` binaries: `bin/yt-dlp_linux` (x86_64) and `bin/yt-dlp_linux_aarch64` (ARM64). `getYtDlpPath()` in `src/app/lib/ytdlp.ts` selects by `process.arch`.
 
 ### Environment variables
 
