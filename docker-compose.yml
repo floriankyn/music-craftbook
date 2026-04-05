@@ -1,9 +1,26 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ytdl
+      POSTGRES_PASSWORD: ytdl_secret
+      POSTGRES_DB: ytdl
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ytdl"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build:
       context: .
       target: deps
-    command: sh -c "npx prisma generate && npm run dev"
+    command: sh -c "npm install && npx prisma migrate deploy && npx prisma generate && npm run dev"
     env_file:
       - .env.local
     environment:
@@ -22,4 +39,5 @@ services:
       - "3000:3000"
 
 volumes:
+  pgdata:
   app_node_modules:
