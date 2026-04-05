@@ -5,6 +5,7 @@ import {
   analyzeBeatInfo,
 } from "@/app/lib/ytdlp";
 import { getSession } from "@/app/lib/session";
+import { prisma } from "@/app/lib/prisma";
 
 export const maxDuration = 60;
 
@@ -21,6 +22,9 @@ function computeDateAfter(filter: string): string {
   return d.toISOString().slice(0, 10).replace(/-/g, "");
 }
 
+const PAGE_SIZE = 15;
+const MAX_PAGE = 4;
+
 export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session?.userId) {
@@ -29,15 +33,17 @@ export async function GET(request: NextRequest) {
 
   const query = request.nextUrl.searchParams.get("q");
   const dateFilter = request.nextUrl.searchParams.get("dateFilter");
+  const page = Math.min(MAX_PAGE, Math.max(1, parseInt(request.nextUrl.searchParams.get("page") || "1", 10)));
 
   if (!query || !query.trim()) {
     return Response.json({ error: "Missing search query" }, { status: 400 });
   }
 
   const ytdlp = getYtDlpPath();
+  const fetchCount = page * PAGE_SIZE;
 
   const args = [
-    `ytsearch15:${query.trim()}`,
+    `ytsearch${fetchCount}:${query.trim()}`,
     "--dump-json",
     "--no-download",
     "--no-playlist",
@@ -50,13 +56,13 @@ export async function GET(request: NextRequest) {
 
   try {
     const { stdout } = await execFileAsync(ytdlp, args, {
-      timeout: 30000,
+      timeout: 45000,
       maxBuffer: 50 * 1024 * 1024,
     });
 
     const lines = stdout.trim().split("\n").filter(Boolean);
 
-    const results = lines.map((line) => {
+    const allResults = lines.map((line) => {
       const data = JSON.parse(line);
       const id = data.id || "";
       const title = data.title || "Untitled";
@@ -73,11 +79,50 @@ export async function GET(request: NextRequest) {
         duration: formatDuration(Math.round(duration)),
         durationSec: Math.round(duration),
         thumbnail,
+        viewCount: typeof data.view_count === "number" ? data.view_count : null,
+        uploader: data.uploader || data.channel || null,
+        uploadDate: data.upload_date || null,
         ...analysis,
       };
     });
 
-    return Response.json({ results });
+    // Return only the new page slice
+    const pageResults = allResults.slice((page - 1) * PAGE_SIZE);
+    const hasMore = page < MAX_PAGE && lines.length >= fetchCount;
+
+    // Persist all seen videos to the cache (fire-and-forget)
+    void Promise.all(
+      allResults
+        .filter((r) => r.id)
+        .map((r) =>
+          prisma.cachedVideo.upsert({
+            where: { videoId: r.id },
+            update: {
+              title: r.title,
+              thumbnail: r.thumbnail,
+              duration: r.duration,
+              durationSec: r.durationSec,
+              url: r.url,
+              viewCount: r.viewCount ?? null,
+              uploader: r.uploader ?? null,
+              uploadDate: r.uploadDate ?? null,
+            },
+            create: {
+              videoId: r.id,
+              title: r.title,
+              thumbnail: r.thumbnail,
+              duration: r.duration,
+              durationSec: r.durationSec,
+              url: r.url,
+              viewCount: r.viewCount ?? null,
+              uploader: r.uploader ?? null,
+              uploadDate: r.uploadDate ?? null,
+            },
+          })
+        )
+    );
+
+    return Response.json({ results: pageResults, page, hasMore });
   } catch {
     return Response.json({ error: "Search failed" }, { status: 500 });
   }

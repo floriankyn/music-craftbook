@@ -16,6 +16,8 @@ model User {
   createdAt    DateTime   @default(now())
   favorites    Favorite[]
   notes        Note[]
+  searchTags   SearchTag[]
+  bannedVideos BannedVideo[]
 }
 
 model Note {
@@ -40,6 +42,43 @@ model Note {
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, videoId])
+}
+
+model BannedVideo {
+  id        String   @id @default(cuid())
+  userId    String
+  videoId   String
+  title     String
+  thumbnail String
+  uploader  String?
+  url       String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+}
+
+model CachedVideo {
+  videoId     String   @id
+  title       String
+  thumbnail   String
+  duration    String
+  durationSec Int
+  url         String
+  viewCount   Int?
+  uploader    String?
+  uploadDate  String?
+  updatedAt   DateTime @updatedAt
+}
+
+model SearchTag {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
 }
 
 model Favorite {

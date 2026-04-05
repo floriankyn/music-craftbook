@@ -43,21 +43,24 @@ A music production web app. Users search YouTube for beats, preview and download
 ```
 src/
   app/
-    page.tsx              # Main page — four tabs: Paste URL, Search YouTube, Favorites, Songs
+    page.tsx              # Main page — five tabs: Paste URL, Search YouTube, Favorites, Songs, Blocked
     layout.tsx            # App title "Music Craftbook", global metadata
     globals.css
     api/
       auth/               # login, logout, signup, me
         google/route.ts       # Google OAuth — redirects to Google consent screen
         google/callback/route.ts  # Google OAuth callback — exchanges code, creates session
-      search/route.ts     # YouTube search via yt-dlp (requires auth)
+      search/route.ts     # YouTube search via yt-dlp — accepts page param, returns hasMore
       analyze/route.ts    # Single-video metadata extraction
       download/route.ts   # Stream download (MP4 / MP3 / WAV)
       preview/route.ts    # Audio preview stream
       favorites/route.ts  # GET / POST / PATCH / DELETE favorites
       notes/[videoId]/route.ts        # GET + PUT note blocks (includes song metadata)
       notes/[videoId]/collab/route.ts # POST — generate editToken; DELETE — revoke
-      songs/route.ts      # GET notes with songName set (no proxy — uses getSession)
+      songs/route.ts      # GET / PATCH (move to folder) notes with songName set
+      songs/folder/route.ts           # PATCH rename folder; DELETE delete folder
+      tags/route.ts       # GET / POST / PATCH / DELETE user search tags
+      banned/route.ts     # GET / POST / DELETE banned videos (never-show-again)
       view/[publicId]/route.ts  # Public note view (no auth)
       collab/[editToken]/route.ts  # GET — load note+favorite for collaborator join
       user/route.ts             # DELETE — delete account (GDPR Art. 17, cascade)
@@ -67,11 +70,11 @@ src/
     notes/[videoId]/page.tsx    # Full lyrics/notes editor (+ real-time collab via Socket.io)
     view/[publicId]/page.tsx    # Read-only public share page
     settings/page.tsx           # Account settings (email, password, export, delete)
-  proxy.ts                # Auth middleware — protects /api/search, /api/favorites, /api/notes, /api/user, /api/collab
+  proxy.ts                # Auth middleware — protects /api/search, /api/favorites, /api/notes, /api/user, /api/collab, /api/songs, /api/tags, /api/banned
 server.ts               # Custom HTTP server: wraps Next.js + mounts Socket.io on the same port
 prisma/
-  schema.prisma         # User, Favorite, Note models
-  migrations/           # 8 migrations (init → … → note_timecodes → google_auth → collab_token)
+  schema.prisma         # User, Favorite, Note, SearchTag, BannedVideo, CachedVideo models
+  migrations/           # 12 migrations (init → … → google_auth → collab_token → note_folder → search_tags → banned_videos → cached_videos)
 ```
 
 ---
@@ -82,7 +85,13 @@ prisma/
 
 **Favorite** — `userId`, `videoId`, `title`, `thumbnail`, `duration`, `durationSec`, `url`, `bpm?`, `key?`, `beatType?`, `inspiredBy[]`, `tags[]`, `dateFilter?`, `freeFilter`, `artistFilter?`, `typeBeat` — plus unique `[userId, videoId]`
 
-**Note** — `userId`, `videoId`, `blocks Json`, `timecodes Json`, `songName?`, `isPublic`, `publicId?` (unique share slug), `editToken?` (unique collab invite token), `bpm?`, `key?`, `beatType?`, `videoTitle?`, `videoThumbnail?`, `videoUrl?` — unique `[userId, videoId]`
+**Note** — `userId`, `videoId`, `blocks Json`, `timecodes Json`, `songName?`, `folder?`, `isPublic`, `publicId?` (unique share slug), `editToken?` (unique collab invite token), `bpm?`, `key?`, `beatType?`, `videoTitle?`, `videoThumbnail?`, `videoUrl?` — unique `[userId, videoId]`
+
+**SearchTag** — `id`, `userId`, `name`, `createdAt` — unique `[userId, name]`. Stores a user's persistent search keyword tags. Cascade-deleted with the user.
+
+**BannedVideo** — `id`, `userId`, `videoId`, `title`, `thumbnail`, `uploader?`, `url`, `createdAt` — unique `[userId, videoId]`. Videos the user never wants to see again in search. Cascade-deleted with the user.
+
+**CachedVideo** — `videoId` (PK), `title`, `thumbnail`, `duration`, `durationSec`, `url`, `viewCount?`, `uploader?`, `uploadDate?`, `updatedAt`. Global (not per-user). Every video returned by `/api/search` is upserted here fire-and-forget. No user relation — not cascade-deleted.
 
 ### Note block shapes
 
@@ -154,6 +163,22 @@ Exposes `BeatPlayerHandle`: `{ getCurrentTime, getDuration, pause, loadAndPlayFr
 
 ### Voice note progress bar
 Uses `block.duration` as fallback denominator when `audio.duration` is not yet loaded (`isFinite(a.duration) && a.duration > 0 ? a.duration : block.duration`).
+
+### Songs tab — folder organization
+- `Note.folder` (`String?`) groups notes in the Songs tab.
+- `PATCH /api/songs` — moves a song: `{ videoId, folder: string | null }`.
+- `PATCH /api/songs/folder` — renames a folder: `{ from, to }` (bulk-updates all notes with that folder).
+- `DELETE /api/songs/folder` — deletes a folder (sets `folder = null` on all songs in it, notes kept).
+- UI: songs grouped by folder (collapsible, amber folder icon) then "Unfiled". Folder header has inline rename and delete. Per-song "Add to folder" / "Move folder" opens a picker panel with existing folders + create-new input.
+
+### Search — tags, history, pagination, metadata, blocked videos
+- **Tags**: `SearchTag` model stores per-user keyword tags in DB. `GET/POST/PATCH/DELETE /api/tags`. Tags appear as filter pills in a dedicated "Tags" row. Clicking toggles them active (appended to the yt-dlp query). Hover reveals inline rename (pencil) and delete (✕). `+ New tag` dashed pill reveals an inline input; hidden by default.
+- **History**: last 15 searches stored in `localStorage["search-history"]` as `SearchHistoryEntry[]` (rawInput, builtQuery, all filter state, timestamp). Shown below the search bar when idle. The currently active query is marked with a checkmark. Clicking an entry restores all filters.
+- **Pagination**: `GET /api/search?q=…&page=N`. API fetches `ytsearch{N*15}` and returns the slice `[(N-1)*15:]` plus a `hasMore` boolean. Max 4 pages (60 results). Client appends results and shows a "Load more" button; when exhausted shows total count.
+- **Search summary bar**: shows above results — result count (e.g. `"15+ beats"` while paginating, `"42 beats"` when done), spinning indicator while loading more, active query in italic, and color-coded filter badges for any active filters.
+- **Video metadata on cards**: each result card shows uploader/channel, view count (formatted as `1.2M` / `450K`), upload date (e.g. `Mar 2024`), and a "Watch on YouTube" link. Extracted from yt-dlp JSON fields `view_count`, `uploader`/`channel`, `upload_date`.
+- **Video cache**: every search result is upserted into `CachedVideo` (global, no user link) fire-and-forget after the response is sent. Stores `videoId`, `title`, `thumbnail`, `duration`, `durationSec`, `url`, `viewCount`, `uploader`, `uploadDate`, `updatedAt`. Allows persistent reference to any seen video regardless of yt-dlp availability.
+- **Blocked videos**: "Never show" button on each result card. Calls `POST /api/banned`, adds to `bannedIds` Set (optimistic), hides video immediately from results. "Blocked" tab appears in nav when `bannedIds.size > 0`. Tab lists all blocked videos with thumbnail, title, uploader, ban date, and "Unblock" button (`DELETE /api/banned?videoId=xxx`). `BannedVideo` stored in DB, cascade-deleted with the user.
 
 ### Real-time collaboration
 - Owner generates an `editToken` via `POST /api/notes/[videoId]/collab` — stored on the Note row (`editToken` column, unique).

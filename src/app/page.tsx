@@ -6,7 +6,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 
 type Format = "mp3" | "mp4" | "wav";
-type Tab = "download" | "search" | "favorites" | "songs";
+type Tab = "download" | "search" | "favorites" | "songs" | "banned";
 type AuthMode = "login" | "signup";
 type DateFilter = "year" | "6months" | "1month" | "2weeks" | "1week" | "1day";
 type ArtistFilter = "Lil Peep" | "Juice WRLD";
@@ -26,6 +26,9 @@ interface SearchResult extends BeatAnalysis {
   duration: string;
   durationSec: number;
   thumbnail: string;
+  viewCount: number | null;
+  uploader: string | null;
+  uploadDate: string | null; // "YYYYMMDD"
 }
 
 interface SavedFilters {
@@ -37,6 +40,26 @@ interface SavedFilters {
 
 interface FavoriteItem extends SearchResult {
   savedFilters: SavedFilters;
+}
+
+interface SearchHistoryEntry {
+  rawInput: string;
+  builtQuery: string;
+  dateFilter: DateFilter | null;
+  freeFilter: boolean;
+  artistFilter: ArtistFilter | null;
+  typeBeat: boolean;
+  customFilters: string[];
+  timestamp: number;
+}
+
+interface BannedItem {
+  videoId: string;
+  title: string;
+  thumbnail: string;
+  uploader: string | null;
+  url: string;
+  createdAt: string;
 }
 
 interface SongItem {
@@ -64,7 +87,8 @@ function buildSearchQuery(
   text: string,
   artist: ArtistFilter | null,
   typeBeat: boolean,
-  free: boolean
+  free: boolean,
+  customFilters: string[] = []
 ): string {
   let q = text.trim();
 
@@ -76,7 +100,53 @@ function buildSearchQuery(
 
   if (free) q = q ? `${q} free` : "free";
 
+  for (const f of customFilters) {
+    const t = f.trim();
+    if (t) q = q ? `${q} ${t}` : t;
+  }
+
   return q;
+}
+
+// ─── Formatters ───────────────────────────────────────────────
+
+function formatViewCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+}
+
+function formatUploadDate(d: string): string {
+  // d = "YYYYMMDD"
+  const year = d.slice(0, 4), month = d.slice(4, 6);
+  return new Date(`${year}-${month}-01`).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+}
+
+// ─── Search expansion ─────────────────────────────────────────
+
+const EXPANSION_SUFFIXES = [
+  "free", "no tags", "instrumental", "hard", "dark", "melodic",
+  "drill", "exclusive", "2025", "loop kit", "sample pack", "chill",
+];
+
+function generateExpansions(activeQuery: string, savedTags: string[]): string[] {
+  const q = activeQuery.toLowerCase();
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  function push(expansion: string) {
+    const key = expansion.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); result.push(expansion); }
+  }
+
+  for (const suffix of EXPANSION_SUFFIXES) {
+    if (!q.includes(suffix.toLowerCase())) push(`${activeQuery} ${suffix}`);
+  }
+  for (const tag of savedTags) {
+    if (!q.includes(tag.toLowerCase())) push(`${activeQuery} ${tag}`);
+  }
+
+  return result.slice(0, 10);
 }
 
 // ─── Audio Preview Hook ───────────────────────────────────────
@@ -254,6 +324,9 @@ function SearchFilters({
   freeFilter, setFreeFilter,
   artistFilter, setArtistFilter,
   typeBeat, setTypeBeat,
+  customFilters, setCustomFilters,
+  savedTags,
+  onAddTag, onRenameTag, onDeleteTag,
 }: {
   dateFilter: DateFilter | null;
   setDateFilter: (v: DateFilter | null) => void;
@@ -263,25 +336,58 @@ function SearchFilters({
   setArtistFilter: (v: ArtistFilter | null) => void;
   typeBeat: boolean;
   setTypeBeat: (v: boolean) => void;
+  customFilters: string[];
+  setCustomFilters: (v: string[]) => void;
+  savedTags: string[];
+  onAddTag: (name: string) => void;
+  onRenameTag: (from: string, to: string) => void;
+  onDeleteTag: (name: string) => void;
 }) {
+  const [adding, setAdding] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const [renamingTag, setRenamingTag] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  function addTag() {
+    const t = tagInput.trim();
+    if (t && !savedTags.includes(t)) onAddTag(t);
+    setTagInput("");
+    setAdding(false);
+  }
+
+  function deleteTag(tag: string) {
+    onDeleteTag(tag);
+    setCustomFilters(customFilters.filter((t) => t !== tag));
+  }
+
+  function commitRename(oldTag: string) {
+    const newTag = renameValue.trim();
+    setRenamingTag(null);
+    if (!newTag || newTag === oldTag) return;
+    onRenameTag(oldTag, newTag);
+    setCustomFilters(customFilters.map((t) => (t === oldTag ? newTag : t)));
+  }
+
+  function toggleTag(tag: string) {
+    setCustomFilters(
+      customFilters.includes(tag)
+        ? customFilters.filter((t) => t !== tag)
+        : [...customFilters, tag]
+    );
+  }
+
   return (
     <div className="space-y-2">
       {/* Row 1: date + free */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 w-10 shrink-0">Date</span>
         {DATE_OPTIONS.map((o) => (
-          <FilterPill
-            key={o.value}
-            active={dateFilter === o.value}
-            onClick={() => setDateFilter(dateFilter === o.value ? null : o.value)}
-          >
+          <FilterPill key={o.value} active={dateFilter === o.value} onClick={() => setDateFilter(dateFilter === o.value ? null : o.value)}>
             {o.label}
           </FilterPill>
         ))}
         <div className="ml-auto">
-          <FilterPill active={freeFilter} color="green" onClick={() => setFreeFilter(!freeFilter)}>
-            Free
-          </FilterPill>
+          <FilterPill active={freeFilter} color="green" onClick={() => setFreeFilter(!freeFilter)}>Free</FilterPill>
         </div>
       </div>
 
@@ -289,22 +395,112 @@ function SearchFilters({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 w-10 shrink-0">Artist</span>
         {ARTIST_OPTIONS.map((a) => (
-          <FilterPill
-            key={a}
-            active={artistFilter === a}
-            color="purple"
-            onClick={() => setArtistFilter(artistFilter === a ? null : a)}
-          >
+          <FilterPill key={a} active={artistFilter === a} color="purple" onClick={() => setArtistFilter(artistFilter === a ? null : a)}>
             {a}
           </FilterPill>
         ))}
-        <FilterPill
-          active={typeBeat}
-          color="red"
-          onClick={() => setTypeBeat(!typeBeat)}
-        >
-          Type beat
-        </FilterPill>
+        <FilterPill active={typeBeat} color="red" onClick={() => setTypeBeat(!typeBeat)}>Type beat</FilterPill>
+      </div>
+
+      {/* Row 3: saved tags */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 w-10 shrink-0">Tags</span>
+
+        {savedTags.map((tag) => {
+          const isActive = customFilters.includes(tag);
+          const isRenaming = renamingTag === tag;
+          return (
+            <div
+              key={tag}
+              className={`group inline-flex items-center rounded-full border text-xs font-medium transition-all ${
+                isActive
+                  ? "border-zinc-700 bg-zinc-800 text-white dark:border-zinc-500 dark:bg-zinc-700"
+                  : "border-zinc-300 text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500"
+              }`}
+            >
+              <button
+                onClick={() => !isRenaming && toggleTag(tag)}
+                className="pl-3 pr-1.5 py-1"
+              >
+                {isRenaming ? (
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename(tag);
+                      if (e.key === "Escape") setRenamingTag(null);
+                    }}
+                    onBlur={() => commitRename(tag)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-16 bg-transparent outline-none border-b border-current leading-none"
+                  />
+                ) : tag}
+              </button>
+              {/* Rename */}
+              <button
+                onClick={(e) => { e.stopPropagation(); setRenamingTag(tag); setRenameValue(tag); }}
+                className={`p-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity ${isActive ? "text-white" : "text-zinc-400"}`}
+              >
+                <svg viewBox="0 0 24 24" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.1 2.1 0 112.97 2.97L7.5 18.81l-4 1 1-4 12.362-12.323z" />
+                </svg>
+              </button>
+              {/* Delete */}
+              <button
+                onClick={(e) => { e.stopPropagation(); deleteTag(tag); }}
+                className={`pr-2 pl-0.5 py-1 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-500 transition-opacity ${isActive ? "text-white" : "text-zinc-400"}`}
+              >
+                <svg viewBox="0 0 24 24" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          );
+        })}
+
+        {/* Add tag toggle */}
+        {adding ? (
+          <div className="inline-flex items-center gap-1">
+            <input
+              autoFocus
+              type="text"
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); addTag(); }
+                if (e.key === "Escape") { setTagInput(""); setAdding(false); }
+              }}
+              placeholder="Tag name…"
+              className="w-24 rounded-full border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 px-3 py-1 text-xs outline-none focus:border-zinc-500 dark:focus:border-zinc-400 transition-colors"
+            />
+            <button
+              onClick={addTag}
+              disabled={!tagInput.trim() || savedTags.includes(tagInput.trim())}
+              className="rounded-full border border-zinc-400 dark:border-zinc-500 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => { setTagInput(""); setAdding(false); }}
+              className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setAdding(true)}
+            className="inline-flex items-center gap-1 rounded-full border border-dashed border-zinc-300 dark:border-zinc-600 px-2.5 py-1 text-xs text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 dark:hover:border-zinc-500 dark:hover:text-zinc-300 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            New tag
+          </button>
+        )}
       </div>
     </div>
   );
@@ -395,7 +591,7 @@ function AuthForm({ onSuccess, oauthError }: { onSuccess: (user: { id: string; e
 // ─── Result Card ──────────────────────────────────────────────
 
 function ResultCard({
-  result, playingId, loadingId, onPlay, onDownload, downloading, favorited, onToggleFavorite, onSearchWithFilters, onNotes,
+  result, playingId, loadingId, onPlay, onDownload, downloading, favorited, onToggleFavorite, onSearchWithFilters, onNotes, onBan,
 }: {
   result: SearchResult;
   playingId: string | null;
@@ -407,6 +603,7 @@ function ResultCard({
   onToggleFavorite: (result: SearchResult) => void;
   onSearchWithFilters?: () => void;
   onNotes?: () => void;
+  onBan?: () => void;
 }) {
   const isPlaying = playingId === result.id;
   const isLoading = loadingId === result.id;
@@ -457,8 +654,35 @@ function ResultCard({
               ))}
             </div>
           )}
+          {/* Video metadata */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-zinc-400 dark:text-zinc-500">
+            {result.uploader && (
+              <span className="flex items-center gap-1 truncate max-w-[140px]">
+                <svg viewBox="0 0 24 24" className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <circle cx="12" cy="8" r="4"/><path strokeLinecap="round" d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+                </svg>
+                <span className="truncate">{result.uploader}</span>
+              </span>
+            )}
+            {result.viewCount !== null && (
+              <span className="flex items-center gap-1">
+                <svg viewBox="0 0 24 24" className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+                {formatViewCount(result.viewCount)}
+              </span>
+            )}
+            {result.uploadDate && (
+              <span className="flex items-center gap-1">
+                <svg viewBox="0 0 24 24" className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <rect x="3" y="4" width="18" height="18" rx="2"/><path strokeLinecap="round" d="M16 2v4M8 2v4M3 10h18"/>
+                </svg>
+                {formatUploadDate(result.uploadDate)}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="mt-2 flex items-center gap-2">
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
           <button
             onClick={() => onDownload(result.id)}
             disabled={isDownloading}
@@ -466,6 +690,17 @@ function ResultCard({
           >
             {isDownloading ? "Downloading..." : "Download WAV"}
           </button>
+          <a
+            href={result.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-500 dark:hover:text-zinc-200 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" className="w-3 h-3" fill="currentColor">
+              <path d="M21.593 7.203a2.506 2.506 0 0 0-1.762-1.766C18.265 5.007 12 5 12 5s-6.264-.007-7.831.404a2.56 2.56 0 0 0-1.766 1.778c-.413 1.566-.417 4.814-.417 4.814s-.004 3.264.406 4.814c.23.857.905 1.534 1.763 1.765 1.582.43 7.83.437 7.83.437s6.265.007 7.831-.403a2.515 2.515 0 0 0 1.767-1.763c.414-1.565.417-4.812.417-4.812s.02-3.265-.407-4.831zM9.996 15.005l.005-6 5.207 3.005-5.212 2.995z"/>
+            </svg>
+            YouTube
+          </a>
           {onSearchWithFilters && (
             <button
               onClick={onSearchWithFilters}
@@ -488,6 +723,18 @@ function ResultCard({
                 <path d="M12 20h9M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 19.635a2 2 0 0 1-.855.506l-2.872.834a.5.5 0 0 1-.62-.62l.834-2.872a2 2 0 0 1 .506-.854z"/>
               </svg>
               Notes
+            </button>
+          )}
+          {onBan && (
+            <button
+              onClick={onBan}
+              title="Never show this again"
+              className="ml-auto flex items-center gap-1 rounded-md border border-zinc-200 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-400 hover:border-red-300 hover:bg-red-50 hover:text-red-500 dark:hover:border-red-800 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10"/><path strokeLinecap="round" d="M4.93 4.93l14.14 14.14"/>
+              </svg>
+              Never show
             </button>
           )}
         </div>
@@ -527,8 +774,15 @@ function DownloaderForm() {
   const [freeFilter, setFreeFilter] = useState(false);
   const [artistFilter, setArtistFilter] = useState<ArtistFilter | null>(null);
   const [typeBeat, setTypeBeat] = useState(false);
+  const [customFilters, setCustomFilters] = useState<string[]>([]);
+  const [savedTags, setSavedTags] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchPage, setSearchPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [activeQuery, setActiveQuery] = useState<string | null>(null);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [downloadingResult, setDownloadingResult] = useState<string | null>(null);
 
   // Favorites
@@ -539,6 +793,10 @@ function DownloaderForm() {
   // Songs
   const [songs, setSongs] = useState<SongItem[]>([]);
   const [songsLoading, setSongsLoading] = useState(false);
+
+  // Banned
+  const [bannedIds, setBannedIds] = useState<Set<string>>(new Set());
+  const [banned, setBanned] = useState<BannedItem[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
   const [renamingFolderValue, setRenamingFolderValue] = useState("");
@@ -552,6 +810,10 @@ function DownloaderForm() {
       .then((r) => r.json())
       .then((data) => setUser(data.user ?? null))
       .finally(() => setAuthLoading(false));
+    try {
+      const stored = localStorage.getItem("search-history");
+      if (stored) setSearchHistory(JSON.parse(stored));
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -580,6 +842,26 @@ function DownloaderForm() {
         }));
         setFavorites(favs);
         setFavoriteIds(new Set(favs.map((f) => f.id)));
+      })
+      .catch(() => {});
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) { setSavedTags([]); return; }
+    fetch("/api/tags")
+      .then((r) => r.json())
+      .then((data) => setSavedTags(data.tags ?? []))
+      .catch(() => {});
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) { setBannedIds(new Set()); setBanned([]); return; }
+    fetch("/api/banned")
+      .then((r) => r.json())
+      .then((data) => {
+        const items: BannedItem[] = data.banned ?? [];
+        setBanned(items);
+        setBannedIds(new Set(items.map((b) => b.videoId)));
       })
       .catch(() => {});
   }, [user]);
@@ -630,21 +912,73 @@ function DownloaderForm() {
     } finally { setDownloading(false); }
   }
 
-  async function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    const q = buildSearchQuery(searchQuery, artistFilter, typeBeat, freeFilter);
+  function saveToHistory(entry: SearchHistoryEntry) {
+    setSearchHistory((prev) => {
+      const filtered = prev.filter((e) => e.builtQuery !== entry.builtQuery);
+      const next = [entry, ...filtered].slice(0, 15);
+      try { localStorage.setItem("search-history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  async function runSearch(q: string, df: DateFilter | null = dateFilter) {
     if (!q) return;
-    stop(); setSearching(true); setError(""); setResults([]);
+    stop(); setSearching(true); setError(""); setResults([]); setSearchPage(1); setHasMore(false);
     try {
-      const params = new URLSearchParams({ q });
-      if (dateFilter) params.set("dateFilter", dateFilter);
+      const params = new URLSearchParams({ q, page: "1" });
+      if (df) params.set("dateFilter", df);
       const res = await fetch(`/api/search?${params}`);
       if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.error || "Search failed"); }
       const data = await res.json();
       setResults(data.results || []);
+      setHasMore(data.hasMore ?? false);
+      setActiveQuery(q);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Search failed");
     } finally { setSearching(false); }
+  }
+
+  async function handleSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const q = buildSearchQuery(searchQuery, artistFilter, typeBeat, freeFilter, customFilters);
+    if (!q) return;
+    await runSearch(q);
+    saveToHistory({ rawInput: searchQuery, builtQuery: q, dateFilter, freeFilter, artistFilter, typeBeat, customFilters, timestamp: Date.now() });
+  }
+
+  async function searchExpansion(q: string) {
+    setSearchQuery(q);
+    setArtistFilter(null); setTypeBeat(false); setFreeFilter(false); setCustomFilters([]);
+    await runSearch(q, null);
+    saveToHistory({ rawInput: q, builtQuery: q, dateFilter: null, freeFilter: false, artistFilter: null, typeBeat: false, customFilters: [], timestamp: Date.now() });
+  }
+
+  async function handleLoadMore() {
+    const q = activeQuery;
+    if (!q) return;
+    const nextPage = searchPage + 1;
+    setLoadingMore(true);
+    try {
+      const params = new URLSearchParams({ q, page: String(nextPage) });
+      if (dateFilter) params.set("dateFilter", dateFilter);
+      const res = await fetch(`/api/search?${params}`);
+      if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.error || "Search failed"); }
+      const data = await res.json();
+      setResults((prev) => [...prev, ...(data.results || [])]);
+      setSearchPage(nextPage);
+      setHasMore(data.hasMore ?? false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Search failed");
+    } finally { setLoadingMore(false); }
+  }
+
+  function applyHistoryEntry(entry: SearchHistoryEntry) {
+    setSearchQuery(entry.rawInput);
+    setDateFilter(entry.dateFilter);
+    setFreeFilter(entry.freeFilter);
+    setArtistFilter(entry.artistFilter);
+    setTypeBeat(entry.typeBeat);
+    setCustomFilters(entry.customFilters);
   }
 
   async function downloadBlob(url: string, fallbackName: string) {
@@ -733,9 +1067,62 @@ function DownloaderForm() {
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
-    setUser(null); setResults([]); setFavorites([]); setFavoriteIds(new Set()); setSongs([]);
+    setUser(null); setResults([]); setFavorites([]); setFavoriteIds(new Set()); setSongs([]); setBanned([]); setBannedIds(new Set());
     stop();
-    if (tab === "favorites" || tab === "songs") setTab("download");
+    if (tab === "favorites" || tab === "songs" || tab === "banned") setTab("download");
+  }
+
+  function handleBan(result: SearchResult) {
+    const item: BannedItem = {
+      videoId: result.id, title: result.title, thumbnail: result.thumbnail,
+      uploader: result.uploader ?? null, url: result.url, createdAt: new Date().toISOString(),
+    };
+    setBannedIds((prev) => new Set(prev).add(result.id));
+    setBanned((prev) => [item, ...prev]);
+    setResults((prev) => prev.filter((r) => r.id !== result.id));
+    fetch("/api/banned", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoId: result.id, title: result.title, thumbnail: result.thumbnail, uploader: result.uploader, url: result.url }),
+    }).catch(() => {
+      setBannedIds((prev) => { const s = new Set(prev); s.delete(result.id); return s; });
+      setBanned((prev) => prev.filter((b) => b.videoId !== result.id));
+    });
+  }
+
+  function handleUnban(videoId: string) {
+    setBannedIds((prev) => { const s = new Set(prev); s.delete(videoId); return s; });
+    setBanned((prev) => prev.filter((b) => b.videoId !== videoId));
+    fetch(`/api/banned?videoId=${videoId}`, { method: "DELETE" }).catch(() => {
+      // Re-add on error is complex; just leave stale — user can refresh
+    });
+  }
+
+  function handleAddTag(name: string) {
+    setSavedTags((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    fetch("/api/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).catch(() => setSavedTags((prev) => prev.filter((t) => t !== name)));
+  }
+
+  function handleRenameTag(from: string, to: string) {
+    setSavedTags((prev) => prev.map((t) => (t === from ? to : t)));
+    fetch("/api/tags", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to }),
+    }).catch(() => setSavedTags((prev) => prev.map((t) => (t === to ? from : t))));
+  }
+
+  function handleDeleteTag(name: string) {
+    setSavedTags((prev) => prev.filter((t) => t !== name));
+    fetch("/api/tags", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).catch(() => setSavedTags((prev) => [...prev, name]));
   }
 
   const formats: { value: Format; label: string }[] = [
@@ -744,7 +1131,7 @@ function DownloaderForm() {
     { value: "wav", label: "WAV" },
   ];
 
-  const hasActiveFilters = !!(dateFilter || freeFilter || artistFilter || typeBeat);
+  const hasActiveFilters = !!(dateFilter || freeFilter || artistFilter || typeBeat || customFilters.length);
 
   return (
     <div className="flex flex-col items-center flex-1 px-4 py-8">
@@ -799,6 +1186,18 @@ function DownloaderForm() {
                   {songs.length}
                 </span>
               )}
+            </button>
+          )}
+          {user && bannedIds.size > 0 && (
+            <button onClick={() => { setTab("banned"); setError(""); }}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${tab === "banned" ? "bg-red-500 text-white" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
+              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10"/><path strokeLinecap="round" d="M4.93 4.93l14.14 14.14"/>
+              </svg>
+              Blocked
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${tab === "banned" ? "bg-white/20 text-white" : "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"}`}>
+                {bannedIds.size}
+              </span>
             </button>
           )}
         </div>
@@ -882,6 +1281,11 @@ function DownloaderForm() {
                   freeFilter={freeFilter} setFreeFilter={setFreeFilter}
                   artistFilter={artistFilter} setArtistFilter={setArtistFilter}
                   typeBeat={typeBeat} setTypeBeat={setTypeBeat}
+                  customFilters={customFilters} setCustomFilters={setCustomFilters}
+                  savedTags={savedTags}
+                  onAddTag={handleAddTag}
+                  onRenameTag={handleRenameTag}
+                  onDeleteTag={handleDeleteTag}
                 />
 
                 <form onSubmit={handleSearch} className="flex gap-2">
@@ -892,7 +1296,7 @@ function DownloaderForm() {
                   }
                     value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                     className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-zinc-700 dark:bg-zinc-900" />
-                  <button type="submit" disabled={searching || (!searchQuery.trim() && !artistFilter && !typeBeat && !freeFilter)}
+                  <button type="submit" disabled={searching || (!searchQuery.trim() && !artistFilter && !typeBeat && !freeFilter && !customFilters.length)}
                     className="rounded-lg bg-red-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50">
                     {searching
                       ? <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -904,9 +1308,61 @@ function DownloaderForm() {
                   <div className="flex items-center gap-2 text-xs text-zinc-400">
                     <span>Searching for:</span>
                     <span className="font-medium text-zinc-600 dark:text-zinc-300 italic">
-                      &ldquo;{buildSearchQuery(searchQuery, artistFilter, typeBeat, freeFilter) || "…"}&rdquo;
+                      &ldquo;{buildSearchQuery(searchQuery, artistFilter, typeBeat, freeFilter, customFilters) || "…"}&rdquo;
                     </span>
                     {dateFilter && <span className="text-zinc-400">· filtered by date</span>}
+                  </div>
+                )}
+
+                {/* Search history */}
+                {!searching && results.length === 0 && searchHistory.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Recent searches</p>
+                      <button
+                        onClick={() => {
+                          setSearchHistory([]);
+                          try { localStorage.removeItem("search-history"); } catch {}
+                        }}
+                        className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                    <div className="space-y-1">
+                      {searchHistory.slice(0, 8).map((entry) => {
+                        const isActive = entry.builtQuery === activeQuery;
+                        const ageMs = Date.now() - entry.timestamp;
+                        const ageLabel = ageMs < 60000 ? "just now"
+                          : ageMs < 3600000 ? `${Math.floor(ageMs / 60000)}m ago`
+                          : ageMs < 86400000 ? `${Math.floor(ageMs / 3600000)}h ago`
+                          : `${Math.floor(ageMs / 86400000)}d ago`;
+                        return (
+                          <button
+                            key={entry.timestamp}
+                            onClick={() => applyHistoryEntry(entry)}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors ${isActive ? "border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20" : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900/50"}`}
+                          >
+                            {isActive ? (
+                              <svg viewBox="0 0 24 24" className="w-4 h-4 flex-shrink-0 text-red-500" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" className="w-4 h-4 flex-shrink-0 text-zinc-400" fill="none" stroke="currentColor" strokeWidth={2}>
+                                <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" d="M12 6v6l4 2" />
+                              </svg>
+                            )}
+                            <span className={`flex-1 min-w-0 text-sm truncate ${isActive ? "font-semibold text-red-600 dark:text-red-400" : "text-zinc-700 dark:text-zinc-300"}`}>
+                              {entry.builtQuery}
+                            </span>
+                            <span className="flex-shrink-0 text-xs text-zinc-400">{ageLabel}</span>
+                            {isActive && (
+                              <span className="flex-shrink-0 text-[10px] font-semibold bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 px-1.5 py-0.5 rounded-full">Active</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 
@@ -921,15 +1377,83 @@ function DownloaderForm() {
 
                 {results.length > 0 && (
                   <div className="space-y-3">
-                    {results.map((result) => (
+                    {/* Search summary */}
+                    <div className="flex items-center gap-2 flex-wrap text-xs text-zinc-500 dark:text-zinc-400 pb-1 border-b border-zinc-100 dark:border-zinc-800">
+                      <span className="font-semibold text-zinc-700 dark:text-zinc-200">
+                        {results.length}{hasMore ? "+" : ""} beat{results.length !== 1 ? "s" : ""}
+                      </span>
+                      {loadingMore && <span className="h-3 w-3 animate-spin rounded-full border border-zinc-300 border-t-zinc-600 dark:border-zinc-600 dark:border-t-zinc-300" />}
+                      <span className="text-zinc-300 dark:text-zinc-600">·</span>
+                      <span className="italic truncate max-w-[180px]">&ldquo;{activeQuery}&rdquo;</span>
+                      {dateFilter && <span className="rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5">{dateFilter}</span>}
+                      {freeFilter && <span className="rounded-full bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 px-2 py-0.5">Free</span>}
+                      {artistFilter && <span className="rounded-full bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 px-2 py-0.5">{artistFilter}</span>}
+                      {typeBeat && <span className="rounded-full bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 px-2 py-0.5">Type beat</span>}
+                      {customFilters.map((f) => (
+                        <span key={f} className="rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5">{f}</span>
+                      ))}
+                    </div>
+
+                    {results.filter((r) => !bannedIds.has(r.id)).map((result) => (
                       <ResultCard key={result.id} result={result} playingId={playingId} loadingId={loadingId}
                         onPlay={play} onDownload={handleDownloadResult} downloading={downloadingResult}
-                        favorited={favoriteIds.has(result.id)} onToggleFavorite={handleToggleFavorite} />
+                        favorited={favoriteIds.has(result.id)} onToggleFavorite={handleToggleFavorite}
+                        onBan={() => handleBan(result)} />
                     ))}
+
+                    {/* Load more / pagination */}
+                    <div className="pt-2 flex flex-col items-center gap-2">
+                      {hasMore ? (
+                        <button
+                          onClick={handleLoadMore}
+                          disabled={loadingMore}
+                          className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg border-2 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:border-red-400 dark:hover:border-red-600 hover:text-red-600 dark:hover:text-red-400 text-sm font-semibold text-zinc-700 dark:text-zinc-300 transition-colors disabled:opacity-50"
+                        >
+                          {loadingMore ? (
+                            <>
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-red-500" />
+                              Loading more…
+                            </>
+                          ) : (
+                            <>
+                              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                              </svg>
+                              Load more results
+                            </>
+                          )}
+                        </button>
+                      ) : activeQuery && (() => {
+                        const expansions = generateExpansions(activeQuery, savedTags);
+                        return (
+                          <div className="w-full pt-2 space-y-3 border-t border-zinc-100 dark:border-zinc-800">
+                            {expansions.length > 0 && (
+                              <div className="space-y-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Explore more</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {expansions.map((exp) => (
+                                    <button
+                                      key={exp}
+                                      onClick={() => searchExpansion(exp)}
+                                      className="inline-flex items-center gap-1.5 rounded-full border border-zinc-300 dark:border-zinc-700 px-3 py-1 text-xs text-zinc-600 dark:text-zinc-400 hover:border-red-400 hover:text-red-600 dark:hover:border-red-600 dark:hover:text-red-400 transition-colors"
+                                    >
+                                      <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2}>
+                                        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                                      </svg>
+                                      {exp}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
                 )}
 
-                {!searching && results.length === 0 && (searchQuery || hasActiveFilters) && (
+                {!searching && results.length === 0 && (searchQuery || hasActiveFilters) && activeQuery && (
                   <p className="text-center text-sm text-zinc-400 py-8">No results. Try a different search.</p>
                 )}
               </>
@@ -1271,6 +1795,52 @@ function DownloaderForm() {
             </div>
           );
         })()}
+
+        {tab === "banned" && user && (
+          <div className="space-y-3">
+            {banned.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-16 text-zinc-400">
+                <svg viewBox="0 0 24 24" className="w-12 h-12 text-zinc-200 dark:text-zinc-700" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <circle cx="12" cy="12" r="10" />
+                  <path strokeLinecap="round" d="M4.93 4.93l14.14 14.14" />
+                </svg>
+                <p className="text-sm font-medium">No blocked videos</p>
+                <p className="text-xs">Videos you block won&apos;t appear in search results.</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-zinc-400 px-1">{banned.length} blocked video{banned.length !== 1 ? "s" : ""}</p>
+                {banned.map((item) => (
+                  <div key={item.videoId} className="flex items-center gap-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3">
+                    {item.thumbnail ? (
+                      <img src={item.thumbnail} alt="" className="flex-shrink-0 h-14 w-[3.75rem] rounded-lg object-cover opacity-60" />
+                    ) : (
+                      <div className="flex-shrink-0 h-14 w-[3.75rem] rounded-lg bg-zinc-100 dark:bg-zinc-800" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium leading-snug truncate text-zinc-700 dark:text-zinc-200">{item.title}</p>
+                      {item.uploader && (
+                        <p className="text-xs text-zinc-400 dark:text-zinc-500 truncate mt-0.5">{item.uploader}</p>
+                      )}
+                      <p className="text-[11px] text-zinc-300 dark:text-zinc-600 mt-0.5">
+                        Blocked {new Date(item.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleUnban(item.videoId)}
+                      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-xs font-medium transition-colors"
+                    >
+                      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Unblock
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
 
         {error && (
           <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-950 dark:text-red-400">

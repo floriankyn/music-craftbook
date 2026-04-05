@@ -74,6 +74,12 @@ Find beat → Save → Write → Record → Sync → Share
 ### 🎵 Beat Search & Download
 
 - Search YouTube with smart filters (type beats, artists, recency)
+- **Custom search tags** — build a personal library of keyword tags, toggle them on/off per search, rename or delete anytime (saved to your account)
+- **Search history** — last 15 searches remembered, restore any with one click
+- **Pagination** — browse up to 60 results across 4 pages with "Load more"
+- **Search summary** — result count, active query, and filter badges above every result list
+- **Video metadata** — each card shows uploader, view count, and upload date; one-click "Watch on YouTube"
+- **Block videos** — "Never show again" on any result hides it permanently; manage blocked videos in a dedicated tab
 - Paste any video URL to analyze
 - Extract:
   - BPM
@@ -185,6 +191,28 @@ Turn notes into a **shareable experience**:
 
 ---
 
+### 🚫 Blocked Videos
+
+Keep your search results clean:
+
+- Click "Never show again" on any search result
+- The video is immediately hidden and saved to your account
+- View and manage all blocked videos in the **Blocked** tab
+- Unblock any video with one click
+
+---
+
+### 🗂️ Song Organization
+
+Keep your sessions tidy with folders:
+
+- Create freely-named folders in the Songs tab
+- Move songs between folders with one click
+- Rename or delete folders inline (songs are never lost)
+- Unfiled songs always visible below your folders
+
+---
+
 ### 👥 Real-time Collaboration
 
 Work on lyrics together, live:
@@ -206,6 +234,7 @@ Work on lyrics together, live:
 | Styling | Tailwind CSS |
 | Database | PostgreSQL + Prisma |
 | Auth | JWT (jose) + bcrypt + Google OAuth 2.0 |
+| Search | yt-dlp · custom tags · history · pagination |
 | Real-time | Socket.io (custom Node.js server) |
 | YouTube | yt-dlp |
 | Audio | ffmpeg |
@@ -260,9 +289,11 @@ npm run dev
 
 ## 🧠 Data Model
 
-- **User** → owns notes + favorites
+- **User** → owns notes + favorites + tags + blocked videos
 - **Favorite** → beat + metadata
 - **Note** → structured blocks (text + audio)
+- **SearchTag** → per-user keyword tags for search
+- **BannedVideo** → videos the user never wants to see in search
 
 ---
 
