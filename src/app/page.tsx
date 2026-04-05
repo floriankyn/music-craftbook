@@ -508,7 +508,7 @@ function SearchFilters({
 
 // ─── Auth Form ────────────────────────────────────────────────
 
-function AuthForm({ onSuccess, oauthError }: { onSuccess: (user: { id: string; email: string; createdAt: string; hasPassword: boolean }) => void; oauthError?: boolean }) {
+function AuthForm({ onSuccess, oauthError }: { onSuccess: (user: { id: string; email: string; createdAt: string; hasPassword: boolean; hasYoutubeKey: boolean }) => void; oauthError?: boolean }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1244,6 +1244,7 @@ function DownloaderForm() {
                 id: videoId, url: url.trim(), title: analysis.title,
                 thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
                 duration: "", durationSec: 0,
+                viewCount: null, uploader: null, uploadDate: null,
                 bpm: analysis.bpm, key: analysis.key, beatType: analysis.beatType,
                 inspiredBy: analysis.inspiredBy, tags: analysis.tags,
               } : null;

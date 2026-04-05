@@ -174,7 +174,7 @@ Uses `block.duration` as fallback denominator when `audio.duration` is not yet l
 
 ### YouTube Data API v3
 - Search and analyze use the **YouTube Data API v3** (not yt-dlp). Each user stores their own `youtubeApiKey` in the DB (`User.youtubeApiKey`).
-- `GET /api/auth/me` returns `hasYoutubeKey: boolean` — never exposes the key itself.
+- `GET /api/auth/me` returns `hasYoutubeKey: boolean` — never exposes the key itself. The user shape used throughout the app (page.tsx state, AuthForm onSuccess) includes this field.
 - `PATCH /api/user/youtube-key` — saves or clears (`""` → `null`) the key for the session user.
 - If no key: routes return `{ error: "...", code: "NO_API_KEY" }` (HTTP 403). Frontend shows an amber CTA banner or a full-tab gate with a button to `/settings#youtube-key`.
 - Error codes from YouTube API: `QUOTA_EXCEEDED` (HTTP 429), `INVALID_KEY` (HTTP 403) — displayed as plain error messages.
