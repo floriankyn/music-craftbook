@@ -42,6 +42,7 @@ interface FavoriteItem extends SearchResult {
 interface SongItem {
   videoId: string;
   songName: string;
+  folder: string | null;
   bpm: string | null;
   key: string | null;
   beatType: string | null;
@@ -538,6 +539,11 @@ function DownloaderForm() {
   // Songs
   const [songs, setSongs] = useState<SongItem[]>([]);
   const [songsLoading, setSongsLoading] = useState(false);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+  const [renamingFolderValue, setRenamingFolderValue] = useState("");
+  const [movingVideoId, setMovingVideoId] = useState<string | null>(null);
+  const [newFolderInput, setNewFolderInput] = useState("");
 
   const { playingId, loadingId, play, stop } = usePreviewPlayer();
 
@@ -972,8 +978,201 @@ function DownloaderForm() {
         )}
 
         {/* ── Songs Tab ── */}
-        {tab === "songs" && user && (
-          songsLoading ? (
+        {tab === "songs" && user && (() => {
+          // Group songs into folders and an unfiled list
+          const folderMap = new Map<string, SongItem[]>();
+          const unfiled: SongItem[] = [];
+          for (const song of songs) {
+            if (song.folder) {
+              if (!folderMap.has(song.folder)) folderMap.set(song.folder, []);
+              folderMap.get(song.folder)!.push(song);
+            } else {
+              unfiled.push(song);
+            }
+          }
+          const folderNames = Array.from(folderMap.keys()).sort();
+
+          function moveSongToFolder(videoId: string, folder: string | null) {
+            fetch("/api/songs", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ videoId, folder }),
+            }).then(() => {
+              setSongs((prev) => prev.map((s) => s.videoId === videoId ? { ...s, folder } : s));
+              setMovingVideoId(null);
+              setNewFolderInput("");
+            });
+          }
+
+          function renameFolder(from: string, to: string) {
+            const trimmed = to.trim();
+            if (!trimmed || trimmed === from) { setRenamingFolder(null); return; }
+            fetch("/api/songs/folder", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ from, to: trimmed }),
+            }).then(() => {
+              setSongs((prev) => prev.map((s) => s.folder === from ? { ...s, folder: trimmed } : s));
+              setExpandedFolders((prev) => {
+                const next = new Set(prev);
+                if (next.has(from)) { next.delete(from); next.add(trimmed); }
+                return next;
+              });
+              setRenamingFolder(null);
+            });
+          }
+
+          function deleteFolder(name: string) {
+            fetch("/api/songs/folder", {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name }),
+            }).then(() => {
+              setSongs((prev) => prev.map((s) => s.folder === name ? { ...s, folder: null } : s));
+              setExpandedFolders((prev) => { const next = new Set(prev); next.delete(name); return next; });
+            });
+          }
+
+          function renderSongCard(song: SongItem) {
+            const allFolders = Array.from(new Set([...folderNames, ...(newFolderInput.trim() ? [newFolderInput.trim()] : [])]));
+            const isMoving = movingVideoId === song.videoId;
+            return (
+              <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden transition-shadow hover:shadow-sm">
+                {/* Main row */}
+                <div className="flex items-start gap-4 p-4">
+                  {song.videoThumbnail ? (
+                    <img src={song.videoThumbnail} alt="" className="flex-shrink-0 h-16 w-[4.5rem] rounded-lg object-cover" />
+                  ) : (
+                    <div className="flex-shrink-0 h-16 w-[4.5rem] rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
+                      <svg viewBox="0 0 24 24" className="w-6 h-6 text-zinc-300 dark:text-zinc-600" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+                      </svg>
+                    </div>
+                  )}
+
+                  <div className="flex-1 min-w-0">
+                    {/* Title row */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-sm leading-snug truncate">{song.songName}</p>
+                        {song.videoTitle && (
+                          <p className="text-xs text-zinc-400 dark:text-zinc-500 truncate mt-0.5">{song.videoTitle}</p>
+                        )}
+                      </div>
+                      <span className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${song.isPublic ? "border-green-300 text-green-700 bg-green-50 dark:border-green-700 dark:text-green-400 dark:bg-green-900/20" : "border-zinc-300 text-zinc-500 bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:bg-zinc-800/50"}`}>
+                        {song.isPublic ? "Public" : "Private"}
+                      </span>
+                    </div>
+
+                    {/* Beat tags */}
+                    {(song.beatType || song.bpm || song.key) && (
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {song.beatType && (
+                          <span className="rounded-md bg-red-50 border border-red-200 px-2 py-0.5 text-xs font-medium text-red-600 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{song.beatType}</span>
+                        )}
+                        {song.bpm && (
+                          <span className="rounded-md bg-zinc-100 border border-zinc-200 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300">{song.bpm} BPM</span>
+                        )}
+                        {song.key && (
+                          <span className="rounded-md bg-zinc-100 border border-zinc-200 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300">{song.key}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => router.push(`/notes/${song.videoId}`)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 active:bg-red-700 text-white text-xs font-semibold transition-colors"
+                      >
+                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M17.5 3.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 8.5-8.5z" />
+                        </svg>
+                        Open notes
+                      </button>
+
+                      {song.isPublic && song.publicId && (
+                        <button
+                          onClick={() => navigator.clipboard.writeText(`${window.location.origin}/view/${song.publicId}`)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs font-medium transition-colors"
+                        >
+                          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                          Copy link
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => { setMovingVideoId(isMoving ? null : song.videoId); setNewFolderInput(""); }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${isMoving ? "border-red-300 bg-red-50 text-red-600 dark:border-red-700 dark:bg-red-900/20 dark:text-red-400" : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300"}`}
+                      >
+                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
+                        </svg>
+                        {song.folder ? "Move folder" : "Add to folder"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Folder picker panel */}
+                {isMoving && (
+                  <div className="border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 px-4 py-3 space-y-3">
+                    <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Move to folder</p>
+                    <div className="flex flex-wrap gap-2">
+                      {song.folder && (
+                        <button
+                          onClick={() => moveSongToFolder(song.videoId, null)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800 bg-white dark:bg-zinc-900 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 text-xs font-medium transition-colors"
+                        >
+                          <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                          Remove from folder
+                        </button>
+                      )}
+                      {allFolders.filter((f) => f !== song.folder).map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => moveSongToFolder(song.videoId, f)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-medium transition-colors"
+                        >
+                          <svg viewBox="0 0 24 24" className="w-3 h-3 text-zinc-400" fill="currentColor">
+                            <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
+                          </svg>
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="New folder name…"
+                        value={newFolderInput}
+                        onChange={(e) => setNewFolderInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && newFolderInput.trim()) moveSongToFolder(song.videoId, newFolderInput.trim());
+                          if (e.key === "Escape") { setMovingVideoId(null); setNewFolderInput(""); }
+                        }}
+                        className="flex-1 text-xs px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 placeholder-zinc-400 outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                      />
+                      <button
+                        onClick={() => { if (newFolderInput.trim()) moveSongToFolder(song.videoId, newFolderInput.trim()); }}
+                        disabled={!newFolderInput.trim()}
+                        className="px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold transition-colors"
+                      >
+                        Create & move
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return songsLoading ? (
             <div className="flex justify-center py-12">
               <span className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-red-500" />
             </div>
@@ -982,61 +1181,96 @@ function DownloaderForm() {
               <svg viewBox="0 0 24 24" className="w-12 h-12 text-zinc-200 dark:text-zinc-700" fill="none" stroke="currentColor" strokeWidth={1.5}>
                 <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
               </svg>
-              <p className="text-sm">No songs yet.</p>
-              <p className="text-xs">Open a note and add a song name to see it here.</p>
+              <p className="text-sm font-medium">No songs yet</p>
+              <p className="text-xs">Open a note and set a song name to see it here.</p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {songs.map((song) => (
-                <div key={song.videoId} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 flex items-start gap-4 hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors">
-                  {song.videoThumbnail && (
-                    <img src={song.videoThumbnail} alt="" className="flex-shrink-0 h-14 w-20 rounded-lg object-cover" />
-                  )}
-                  <div className="flex-1 min-w-0 space-y-1.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-sm leading-tight truncate">{song.songName}</p>
-                        {song.videoTitle && (
-                          <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{song.videoTitle}</p>
-                        )}
-                      </div>
-                      <span className={`flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${song.isPublic ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "bg-zinc-200 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400"}`}>
-                        {song.isPublic ? "Public" : "Private"}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {song.beatType && (
-                        <span className="rounded-md bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">{song.beatType}</span>
+            <div className="space-y-4">
+              {/* Folders */}
+              {folderNames.map((folderName) => (
+                <div key={folderName} className="rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                  {/* Folder header */}
+                  <div className="flex items-center gap-2 px-4 py-3 bg-zinc-50 dark:bg-zinc-900/70 border-b border-zinc-200 dark:border-zinc-800">
+                    <button
+                      onClick={() => setExpandedFolders((prev) => {
+                        const next = new Set(prev);
+                        next.has(folderName) ? next.delete(folderName) : next.add(folderName);
+                        return next;
+                      })}
+                      className="flex items-center gap-2 flex-1 min-w-0 text-left group"
+                    >
+                      <svg viewBox="0 0 24 24" className="w-4 h-4 flex-shrink-0 text-amber-500" fill="currentColor">
+                        <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
+                      </svg>
+                      {renamingFolder === folderName ? (
+                        <input
+                          type="text"
+                          value={renamingFolderValue}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setRenamingFolderValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") renameFolder(folderName, renamingFolderValue);
+                            if (e.key === "Escape") setRenamingFolder(null);
+                          }}
+                          onBlur={() => renameFolder(folderName, renamingFolderValue)}
+                          autoFocus
+                          className="flex-1 min-w-0 text-sm font-semibold bg-transparent border-b-2 border-red-400 outline-none"
+                        />
+                      ) : (
+                        <span className="text-sm font-semibold truncate group-hover:text-red-500 transition-colors">{folderName}</span>
                       )}
-                      {song.bpm && (
-                        <span className="rounded-md bg-zinc-200 px-2 py-0.5 text-xs font-medium dark:bg-zinc-700">{song.bpm}</span>
-                      )}
-                      {song.key && (
-                        <span className="rounded-md bg-zinc-200 px-2 py-0.5 text-xs font-medium dark:bg-zinc-700">{song.key}</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-400 font-normal tabular-nums">{folderMap.get(folderName)!.length} song{folderMap.get(folderName)!.length !== 1 ? "s" : ""}</span>
+                      <svg viewBox="0 0 24 24" className={`w-4 h-4 flex-shrink-0 text-zinc-400 transition-transform duration-200 ${expandedFolders.has(folderName) ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    <div className="flex items-center gap-1 flex-shrink-0">
                       <button
-                        onClick={() => router.push(`/notes/${song.videoId}`)}
-                        className="text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white transition-colors"
+                        onClick={() => { setRenamingFolder(folderName); setRenamingFolderValue(folderName); }}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:text-zinc-800 dark:hover:text-zinc-100 transition-colors"
                       >
-                        Open notes →
+                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Rename
                       </button>
-                      {song.isPublic && song.publicId && (
-                        <button
-                          onClick={() => navigator.clipboard.writeText(`${window.location.origin}/view/${song.publicId}`)}
-                          className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
-                        >
-                          Copy share link
-                        </button>
-                      )}
+                      <button
+                        onClick={() => deleteFolder(folderName)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-zinc-500 dark:text-zinc-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                      >
+                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                        Delete
+                      </button>
                     </div>
                   </div>
+                  {expandedFolders.has(folderName) && (
+                    <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                      {folderMap.get(folderName)!.map((song) => (
+                        <div key={song.videoId}>
+                          {renderSongCard(song)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
+
+              {/* Unfiled songs */}
+              {unfiled.length > 0 && (
+                <div className="space-y-3">
+                  {folderNames.length > 0 && (
+                    <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider px-1">Unfiled</p>
+                  )}
+                  {unfiled.map((song) => (
+                    <div key={song.videoId}>{renderSongCard(song)}</div>
+                  ))}
+                </div>
+              )}
             </div>
-          )
-        )}
+          );
+        })()}
 
         {error && (
           <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-950 dark:text-red-400">

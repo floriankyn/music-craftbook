@@ -28,6 +28,7 @@ model Note {
   isPublic       Boolean  @default(false)
   publicId       String?  @unique
   editToken      String?  @unique
+  folder         String?
   bpm            String?
   key            String?
   beatType       String?
